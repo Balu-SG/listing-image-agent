@@ -9,8 +9,12 @@ Parameters:
     Default: claude
   AgentModel:
     Type: String
-    Default: claude-opus-5-5
-    Description: Claude model id (the Bedrock client adds the "anthropic." prefix)
+    Default: claude-opus-4-6-v1
+    Description: Claude model id; the Bedrock client turns it into the au. inference profile in Sydney.
+      The account's free plan allows Opus 4.6 / Sonnet 4.5 / Haiku 4.5, not the 5.x models.
+  AgentEffort:
+    Type: String
+    Default: low
   BedrockRegion:
     Type: String
     Default: ap-southeast-2   # the account's free-plan region; Claude is called via the au. inference profile
@@ -71,6 +75,7 @@ Resources:
           PLANNER: !Ref Planner
           AGENT_BACKEND: bedrock
           AGENT_MODEL: !Ref AgentModel
+          AGENT_EFFORT: !Ref AgentEffort
           BEDROCK_REGION: !Ref BedrockRegion
           DAILY_CLAUDE_LIMIT: !Ref DailyClaudeLimit
       Policies:

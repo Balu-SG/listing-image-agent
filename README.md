@@ -128,7 +128,7 @@ credentials need the `botocore[crt]` dev dependency (installed by `uv sync`).
 Needs AWS CLI, SAM CLI, Docker, Node and Bedrock model access for Claude.
 
 ```bash
-ALERT_EMAIL=you@example.com scripts/deploy.sh
+ALERT_EMAIL=you@example.com scripts/deploy.sh preview   # then: ... apply
 ```
 
 | Piece | Service |
