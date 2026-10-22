@@ -81,7 +81,7 @@ def rule_help(config: dict) -> dict:
             "amazon": "Clear, non-pixelated, no jagged edges. Accurately represent the product as a realistic, professional-quality image.",
             "what": "The product must be in focus.",
             "why": "Amazon's image quality requirement; blurry photos also lose clicks.",
-            "how": f"Variance of the Laplacian (edge strength) on the product; below {config['sharpness']['min_laplacian_var']} counts as blurry (our threshold).",
+            "how": f"We measure edge crispness (the Laplacian) along the product's edges; below {config['sharpness']['min_edge_sharpness']} counts as blurry (our threshold, so smooth products are not mistaken for blur).",
             "fix": None,
         },
         "R7": {

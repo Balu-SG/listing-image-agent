@@ -46,10 +46,60 @@ shown once. `pad_to_square` is our choice (square thumbnails), not an Amazon rul
 ## Results on 60 Amazon Berkeley Objects main images (rule planner)
 
 - Product-unchanged check passed on **60 / 60** images.
-- Average score **94 -> 99**; 56 of 60 reach 100.
+- Average score **95 -> 99**; 57 of 60 reach 100.
 - ~0.3 s per inspection, ~1 s per analysis inside the Lambda container (arm64, 3 GB).
 
-Per-rule precision/recall against hand labels: _pending — `eval/labels.csv`_.
+### Accuracy against labels
+
+**How the labels were made.** Each image was labelled per rule (PASS / FIXABLE / RESHOOT) by an AI visual
+review (Claude, looking at the images only, blind to the inspector's output), **not by a human**. A human
+spot-check is still recommended. Unsure cells were left blank and are skipped.
+"Violation" means anything other than PASS; precision and recall are for catching violations
+(n/a where the sample has no violations of that rule).
+
+**Held-out set** (29 ABO images never used during development; `eval/labels_holdout.csv`):
+
+| Rule | Labelled | Real violations | Flagged | Caught | False alarms | Missed | Precision | Recall | Exact status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| R1 | 29 | 3 | 5 | 2 | 3 | 1 | 0.40 | 0.67 | 0.86 |
+| R2 | 29 | 15 | 15 | 14 | 1 | 1 | 0.93 | 0.93 | 0.93 |
+| R3 | 29 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
+| R4 | 29 | 0 | 1 | 0 | 1 | 0 | 0.00 | n/a | 0.97 |
+| R5 | 29 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
+| R6 | 29 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
+| R7 | 29 | 2 | 5 | 2 | 3 | 0 | 0.40 | 1.00 | 0.90 |
+| R8 | 29 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
+
+**Development set** (the 60 images used while building; three inspector bugs found here were fixed,
+so these numbers are optimistic; `eval/labels.csv`):
+
+| Rule | Labelled | Real violations | Flagged | Caught | False alarms | Missed | Precision | Recall | Exact status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| R1 | 60 | 6 | 8 | 4 | 4 | 2 | 0.50 | 0.67 | 0.88 |
+| R2 | 60 | 27 | 26 | 25 | 1 | 2 | 0.96 | 0.93 | 0.95 |
+| R3 | 60 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
+| R4 | 60 | 1 | 0 | 0 | 0 | 1 | n/a | 0.00 | 0.98 |
+| R5 | 60 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
+| R6 | 60 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
+| R7 | 59 | 0 | 2 | 0 | 2 | 0 | 0.00 | n/a | 0.97 |
+| R8 | 60 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
+
+**Reading the disagreements**
+- R1: most "false alarms" are real but invisible: the backdrop looks white, but only 74-97% of its pixels
+  are exactly Amazon's RGB 255 (on the phone-case images the rest measure 253). Labels made by eye cannot
+  see this.
+- R1/R7: reflections under a product are treated as part of the product, so they are not whitened and
+  can read as "cut off" when they touch the frame edge. A known limit.
+- R4: a badge that overlaps the product (the "renewed" banner) merges with it and is missed.
+
+Reproduce:
+
+```bash
+uv run python scripts/fetch_abo.py --count 60 --out data/abo                                   # development set
+uv run python scripts/fetch_abo.py --count 30 --seed 2026 --listing-files 2 --out data/abo_holdout
+rm data/abo_holdout/71JOBttpFKL.jpg                                                             # also in the dev set
+uv run python eval/run_eval.py --images data/abo_holdout --labels eval/labels_holdout.csv --show-disagreements
+```
 
 ## Run locally
 

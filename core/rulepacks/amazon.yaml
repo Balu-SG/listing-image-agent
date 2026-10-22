@@ -23,7 +23,8 @@ resolution:
 
 text:
   max_long_side: 960          # detector input size (multiple of 32)
-  product_overlap_allowed: 0.5  # box mostly on the product = printed packaging, allowed
+  product_overlap_allowed: 0.25  # [ours] more than this on the product = printed packaging, allowed
+  min_box_share: 0.001        # [ours] text boxes smaller than 0.1% of the image are ignored
 
 border:
   max_share: 0.08             # thickest border searched for, as share of long side
@@ -31,7 +32,8 @@ border:
   max_std: 12                 # border lines are near-uniform along the whole side
 
 sharpness:
-  min_laplacian_var: 60       # measured on the product region resized to 1000px
+  min_edge_sharpness: 12      # [ours] 90th percentile |Laplacian| on product edges at 1000 px;
+                              # 60 ABO images score >= 16, blurred copies 4-10
 
 framing:
   edge_touch_share: 0.02      # product touching the frame along this much of a side = cut off

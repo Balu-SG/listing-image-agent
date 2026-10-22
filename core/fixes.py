@@ -134,10 +134,13 @@ def inpaint_watermark(state: FixState, ctx_config: dict) -> FixState:
         raise FixError("scene background: text removal only runs on plain backdrops")
     ctx = Context(image=state.image, mask=state.mask, protect=state.protect, config=ctx_config, mode=state.mode)
     allowed = ctx_config["text"]["product_overlap_allowed"]
+    min_area = ctx_config["text"]["min_box_share"] * state.image.shape[0] * state.image.shape[1]
     region = np.zeros(state.mask.shape, np.uint8)
     for box in text_boxes(ctx):
         box_mask = np.zeros_like(region)
         cv2.fillPoly(box_mask, [box], 255)
+        if int((box_mask > 0).sum()) < min_area:
+            continue
         overlap = float(((box_mask > 0) & (state.mask > 0)).sum()) / max(int((box_mask > 0).sum()), 1)
         if overlap <= allowed:
             region |= box_mask

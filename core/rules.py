@@ -130,10 +130,13 @@ def r3_resolution(ctx: Context) -> RuleResult:
 def r4_text(ctx: Context) -> RuleResult:
     allowed_overlap = ctx.config["text"]["product_overlap_allowed"]
     added, printed = [], []
+    min_area = ctx.config["text"]["min_box_share"] * ctx.height * ctx.width
     for box in text_boxes(ctx):
         box_mask = np.zeros_like(ctx.mask)
         cv2.fillPoly(box_mask, [box], 255)
         area = max(int((box_mask > 0).sum()), 1)
+        if area < min_area:
+            continue  # a speck too small to read is texture, not added text
         overlap = float(((box_mask > 0) & (ctx.mask > 0)).sum()) / area
         (printed if overlap > allowed_overlap else added).append(box.tolist())
 
@@ -203,6 +206,8 @@ def border_band(shape: tuple[int, int], thickness: dict[str, int], extra: int = 
 
 
 def r5_border(ctx: Context) -> RuleResult:
+    if ctx.mode == "scene":
+        return RuleResult("R5", "No border or frame", Status.PASS, 1.0, "Not judged on a scene photo; the whole photo needs replacing.")
     thickness = find_border(ctx.image, ctx.config)
     sides = list(thickness)
     evidence = {"border_sides": sides, "thickness_px": thickness}
@@ -221,12 +226,17 @@ def r6_sharpness(ctx: Context) -> RuleResult:
     region = cv2.dilate(region, np.ones((9, 9), np.uint8)) > 0  # include the product's outline
     if not region.any():
         return RuleResult("R6", "Sharp, in focus", Status.RESHOOT, 0.0, "No product found.")
-    variance = float(cv2.Laplacian(gray, cv2.CV_64F)[region].var())
-    evidence = {"laplacian_var": round(variance, 1)}
-    value = min(1.0, variance / cfg["min_laplacian_var"])
-    if variance >= cfg["min_laplacian_var"]:
+    # Measured on the product's edges only: a smooth, low-texture product (felt, plain fabric) has
+    # little detail inside but still crisp edges; a blurred photo has soft edges everywhere.
+    edges = cv2.dilate(cv2.Canny(gray, 30, 90), np.ones((3, 3), np.uint8)) > 0
+    selected = region & edges
+    laplacian = np.abs(cv2.Laplacian(gray, cv2.CV_64F))
+    sharpness = float(np.percentile(laplacian[selected], 90)) if selected.sum() > 50 else 0.0
+    evidence = {"edge_sharpness": round(sharpness, 1)}
+    value = min(1.0, sharpness / cfg["min_edge_sharpness"])
+    if sharpness >= cfg["min_edge_sharpness"]:
         return RuleResult("R6", "Sharp, in focus", Status.PASS, value, "Product is sharp.", evidence=evidence)
-    return RuleResult("R6", "Sharp, in focus", Status.RESHOOT, value, f"Product looks blurry (score {variance:.0f}).", evidence=evidence)
+    return RuleResult("R6", "Sharp, in focus", Status.RESHOOT, value, f"Product looks blurry (edge sharpness {sharpness:.0f}).", evidence=evidence)
 
 
 def r7_framing(ctx: Context) -> RuleResult:
