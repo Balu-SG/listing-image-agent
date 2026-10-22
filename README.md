@@ -1,57 +1,96 @@
 # Listing Image Compliance Agent
 
-An agent that makes product listing images marketplace-compliant and easier to spot in search,
-without ever changing the product. OpenCV 5 does every check and every pixel edit; Claude on
-Amazon Bedrock only plans which fixes to run and explains them.
+An agent that makes product listing main images marketplace-compliant and easier to spot in
+search, **without ever changing the product**. OpenCV 5 does every check and every pixel edit;
+Claude on Amazon Bedrock only plans which fixes to run and explains them to the seller. Every
+edit is verified against the original product pixels before it is kept.
 
 Entry for the OpenCV AI Competition 2026 (powered by AWS).
 
-## Status
+## How it works
 
-- [x] Inspector: segmentation + 8 rules + score (`core/`)
-- [ ] Fix tools + product-unchanged check
-- [ ] Thumbnail visibility test
-- [ ] Agent loop (Claude on Bedrock)
-- [ ] AWS deployment (SAM) + web UI
+1. **Segment.** On a plain backdrop the background is found by flood-filling inward from the image
+   edges in small colour steps, with Canny edges acting as walls. Everything the flood cannot reach
+   is product, so printed labels, thin straps and holes inside the product are kept. Lifestyle
+   (scene) photos fall back to U^2-Net-p through `cv2.dnn` for measuring only; their background is
+   never edited. Separate pieces mostly covered by detected text (badges, watermarks) are overlays,
+   not product.
+2. **Inspect** 8 rules from a YAML rule pack (`core/rulepacks/amazon.yaml`), score 0-100.
+3. **Plan.** Claude receives the inspection JSON (never pixels) and calls fix tools. A deterministic
+   rule planner does the same offline, when the demo budget is spent, or if Claude declines.
+4. **Fix and verify.** Each tool is a deterministic OpenCV operation. Before a result is kept the
+   session checks that **no product pixel changed** (exact comparison after mapping the original
+   product region through the crop/pad transform; round-trip PSNR >= 35 dB after super-resolution)
+   and that the score did not drop. Rejected calls are reported back to the planner.
+5. **Search visibility.** The image is shrunk to a mobile search tile among 8 neighbour products
+   and scored with spectral-residual saliency (50 = average share of attention).
 
-## Quick start
+| Rule | Check | OpenCV technique | Fix tool |
+| --- | --- | --- | --- |
+| R1 | Pure white background | Channel minimum over the backdrop | `whiten_background` |
+| R2 | Product fills >= 85% | Mask bounding box vs frame | `recrop_to_fill` |
+| R3 | Resolution | Longest side | `upscale` (ESPCN x2, `dnn_superres`) |
+| R4 | No added text or badges | PP-OCRv3 DB detector (`TextDetectionModel_DB`) | `inpaint_watermark` (`cv2.inpaint`) |
+| R5 | No border | Line-by-line uniformity scan from each edge | `remove_border` |
+| R6 | Sharp | Variance of the Laplacian on the product | reshoot |
+| R7 | Centred, not cut off | Mask touching the frame; centre offset | `recrop_to_fill` |
+| R8 | Exposure | Product luminance mean and 99th percentile | reshoot |
+
+## Results on 60 Amazon Berkeley Objects main images (rule planner)
+
+- Product-unchanged check passed on **60 / 60** images.
+- Average score **94 -> 98**; 54 of 60 reach 100.
+- ~0.3 s per inspection, ~1 s per analysis inside the Lambda container (arm64, 3 GB).
+
+Per-rule precision/recall against hand labels: _pending — `eval/labels.csv`_.
+
+## Run locally
 
 ```bash
 uv sync
-scripts/fetch_models.sh                                  # U^2-Net-p, PP-OCRv3 DB text detector, ESPCN x2
-uv run python scripts/fetch_abo.py --count 60            # sample of Amazon Berkeley Objects main images
-uv run python -m core.cli inspect data/abo/*.jpg --out out/abo   # JSON report + overlay per image
-uv run pytest
+scripts/fetch_models.sh                                   # U^2-Net-p, PP-OCRv3 DB, ESPCN x2
+uv run python scripts/fetch_abo.py --count 60             # sample of ABO main images
+uv run pytest                                             # 23 tests, offline
+
+uv run python -m core.cli inspect data/abo/*.jpg --out out/abo       # reports + overlays
+uv run python -m agent.cli data/abo/*.jpg --out out/fixed            # fix with the rule planner
+
+uv run uvicorn api.app:app --port 8000                    # API (docs/API.md)
+(cd web && npm install && npm run dev)                    # UI on http://localhost:5173
+uv run python scripts/build_gallery.py data/abo/91wf28y8wLL.jpg ...  # precomputed examples
 ```
 
-## How the inspector works
+Use Claude as the planner: `PLANNER=claude AGENT_BACKEND=bedrock BEDROCK_REGION=us-east-1` (AWS
+credentials with Bedrock access) or `AGENT_BACKEND=anthropic` with `ANTHROPIC_API_KEY`.
+`AGENT_MODEL` defaults to `claude-opus-5-5`; `AGENT_EFFORT` defaults to `low`.
 
-1. **Segment** the product with U^2-Net-p through `cv2.dnn` (colour-distance fallback).
-   A second, conservative **protect mask** adds any non-white pixels near the product
-   (thin straps, ear loops, soft shadows); fixes will never touch it.
-2. **Check** 8 rules from a YAML rule pack (`core/rulepacks/amazon.yaml`):
+## Deploy to AWS
 
-| Rule | Check | OpenCV technique |
-| --- | --- | --- |
-| R1 | Pure white background | Channel minimum over the background outside the protect mask |
-| R2 | Product fills >= 85% | Mask bounding box vs frame |
-| R3 | Resolution | Longest side; 2x ESPCN upscale counts as fixable |
-| R4 | No added text or badges | PP-OCRv3 DB text detector (`TextDetectionModel_DB`); text on the product is allowed |
-| R5 | No border | Line-by-line uniformity scan inward from each edge |
-| R6 | Sharp | Variance of the Laplacian on the product region |
-| R7 | Centred, not cut off | Mask touching the frame edge; bounding-box centre offset |
-| R8 | Exposure | Product luminance mean and 99th percentile, ignoring filled-in holes |
+Needs AWS CLI, SAM CLI, Docker, Node and Bedrock model access for Claude.
 
-3. **Score** 0-100: each rule earns its weight for PASS, half for FIXABLE, nothing for RESHOOT.
+```bash
+ALERT_EMAIL=you@example.com scripts/deploy.sh
+```
+
+| Piece | Service |
+| --- | --- |
+| Inspector, fix tools, agent loop | Lambda (container image in ECR, arm64, 3 GB) |
+| Planner | Claude on Amazon Bedrock |
+| API | API Gateway HTTP API (5 req/s, burst 10) -> Lambda |
+| Fix jobs | Asynchronous Lambda self-invocation; the UI polls |
+| Images | S3 (30-day expiry), served by presigned URL |
+| Results, daily counters | DynamoDB (on demand) |
+| Web UI | S3 + CloudFront |
+| Cost guard | AWS Budgets ($20/month alert), reserved concurrency 5, daily Claude cap |
 
 ## Known limits
 
-- A badge that touches the product (for example a "renewed" banner over the product's base) is merged into the
-  product mask by U^2-Net, so its text counts as printed on the product.
-- White products on white backgrounds are hard to segment; exposure is not judged for them.
-- Thresholds are our reading of Amazon's style guide, not Amazon's algorithm.
+- A badge that touches the product (e.g. a "renewed" banner over its base) merges with the product.
+- A lifestyle photo with a large plain wall can pass as a studio shot; props stay as "product".
+- White products on white backdrops: exposure is not judged.
+- Thresholds are our reading of Amazon's style guide, not Amazon's internal algorithm.
 
-## Data and models
+## Credits
 
-- Amazon Berkeley Objects, CC BY 4.0 — https://amazon-berkeley-objects.s3.amazonaws.com/index.html
-- U^2-Net-p (Apache-2.0), PP-OCRv3 text detection via OpenCV Zoo (Apache-2.0), ESPCN x2 (TF-ESPCN)
+- Amazon Berkeley Objects, CC BY 4.0 — sample and neighbour images.
+- U^2-Net-p (Apache-2.0), PP-OCRv3 text detection via OpenCV Zoo (Apache-2.0), ESPCN (TF-ESPCN).
