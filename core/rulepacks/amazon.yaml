@@ -37,6 +37,8 @@ sharpness:
 
 framing:
   edge_touch_share: 0.02      # product touching the frame along this much of a side = cut off
+  solid_min_saturation: 30    # [ours] product pixels at the edge must be colourful (HSV S > 30)
+  solid_max_brightness: 200   # [ours] or dark (HSV V < 200); washed-out reflections do not count
   max_center_offset: 0.08     # [ours] advice only; Amazon has no centring rule
 
 exposure:

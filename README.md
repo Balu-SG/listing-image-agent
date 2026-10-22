@@ -67,7 +67,7 @@ spot-check is still recommended. Unsure cells were left blank and are skipped.
 | R4 | 29 | 0 | 1 | 0 | 1 | 0 | 0.00 | n/a | 0.97 |
 | R5 | 29 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
 | R6 | 29 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
-| R7 | 29 | 2 | 5 | 2 | 3 | 0 | 0.40 | 1.00 | 0.90 |
+| R7 | 29 | 2 | 3 | 2 | 1 | 0 | 0.67 | 1.00 | 0.97 |
 | R8 | 29 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
 
 **Development set** (the 60 images used while building; three inspector bugs found here were fixed,
@@ -81,15 +81,17 @@ so these numbers are optimistic; `eval/labels.csv`):
 | R4 | 60 | 1 | 0 | 0 | 0 | 1 | n/a | 0.00 | 0.98 |
 | R5 | 60 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
 | R6 | 60 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
-| R7 | 59 | 0 | 2 | 0 | 2 | 0 | 0.00 | n/a | 0.97 |
+| R7 | 59 | 0 | 1 | 0 | 1 | 0 | 0.00 | n/a | 0.98 |
 | R8 | 60 | 0 | 0 | 0 | 0 | 0 | n/a | n/a | 1.00 |
 
 **Reading the disagreements**
 - R1: most "false alarms" are real but invisible: the backdrop looks white, but only 74-97% of its pixels
   are exactly Amazon's RGB 255 (on the phone-case images the rest measure 253). Labels made by eye cannot
   see this.
-- R1/R7: reflections under a product are treated as part of the product, so they are not whitened and
-  can read as "cut off" when they touch the frame edge. A known limit.
+- R1: reflections under a product are treated as part of the product, so they are not whitened.
+- R7: only solid (colourful or dark) product pixels count as running off the edge, so washed-out
+  reflections no longer read as "cut off"; the trade-off is that a white product genuinely cut off
+  at the edge can be missed.
 - R4: a badge that overlaps the product (the "renewed" banner) merges with it and is missed.
 
 Reproduce:

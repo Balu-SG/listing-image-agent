@@ -244,10 +244,13 @@ def r7_framing(ctx: Context) -> RuleResult:
     bbox = _bbox(ctx.mask)
     if bbox is None:
         return RuleResult("R7", "Whole product in frame", Status.RESHOOT, 0.0, "No product found.")
-    product = ctx.mask > 0
+    # Only SOLID product pixels count as running off the edge: reflections and shadow fades under a
+    # product are washed out (bright and colourless), real product is colourful or dark.
+    hsv = cv2.cvtColor(ctx.image, cv2.COLOR_BGR2HSV)
+    solid = (ctx.mask > 0) & ((hsv[..., 1] > cfg["solid_min_saturation"]) | (hsv[..., 2] < cfg["solid_max_brightness"]))
     touching = {
-        "top": product[0, :].mean(), "bottom": product[-1, :].mean(),
-        "left": product[:, 0].mean(), "right": product[:, -1].mean(),
+        "top": solid[0, :].mean(), "bottom": solid[-1, :].mean(),
+        "left": solid[:, 0].mean(), "right": solid[:, -1].mean(),
     }
     cut_sides = [side for side, share in touching.items() if share >= cfg["edge_touch_share"]]
     x, y, w, h = bbox
