@@ -1,0 +1,49 @@
+# Amazon main-image rule pack. Thresholds are our interpretation of the published
+# style guide, not Amazon's internal algorithm; tune them against eval/labels.csv.
+marketplace: amazon
+segmentation: auto            # auto | u2net | threshold
+
+background:
+  pure_value: 255             # every channel must be >= this to count as pure white
+  near_white_value: 235       # whiter than this is "off-white", fixable by whitening
+  pass_share: 0.98            # share of background pixels that must be pure white
+  edge_margin: 0.01           # ignore a band this wide (share of long side) around the product edge
+
+fill:
+  pass_ratio: 0.85            # product's longest side / frame side
+  target_ratio: 0.87          # what recrop_to_fill aims for
+
+resolution:
+  pass_long_side: 1000        # zoom-enabled; some sources say 1600, confirm in Seller Central
+  hard_min_long_side: 500     # below this after any fix = reshoot
+
+text:
+  max_long_side: 960          # detector input size (multiple of 32)
+  product_overlap_allowed: 0.5  # box mostly on the product = printed packaging, allowed
+
+border:
+  max_share: 0.08             # thickest border searched for, as share of long side
+  min_contrast: 20            # luma difference between the border and what lies inside it
+  max_std: 12                 # border lines are near-uniform along the whole side
+
+sharpness:
+  min_laplacian_var: 60       # measured on the product region resized to 1000px
+
+framing:
+  edge_touch_share: 0.02      # product touching the frame along this much of a side = cut off
+  max_center_offset: 0.08     # bbox centre offset as share of frame
+
+exposure:
+  min_judged_share: 0.3       # below this the product is mostly white and exposure is not judged
+  max_mean_luma: 235          # washed out
+  min_p99_luma: 60            # no highlights at all = underexposed (black products still have some)
+
+weights:
+  R1: 3
+  R2: 2
+  R3: 1
+  R4: 3
+  R5: 1
+  R6: 2
+  R7: 2
+  R8: 1
