@@ -21,8 +21,10 @@ IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 FLOOD_STEP = 3              # max colour step between neighbouring background pixels
+FLOOD_WORKING_SIDE = 1000   # flood runs at this long side, whatever the upload size
 STUDIO_MIN_SHARE = 0.08     # backdrop must cover at least this much of the frame
 STUDIO_MAX_STD = 28         # and be fairly uniform in brightness
+STUDIO_MAX_SATURATION = 40  # and white or neutral grey (median HSV saturation, 0-255)
 MIN_PIECE_SHARE = 0.0015    # product pieces smaller than this share of the frame are noise
 MIN_PRODUCT_SHARE = 0.01    # less product than this = segmentation failed; nothing may be edited
 EDGE_LOW, EDGE_HIGH = 8, 24  # low Canny thresholds: faint outlines must still stop the flood
@@ -52,7 +54,18 @@ def segment_threshold(image: np.ndarray, white_tolerance: int = 12) -> np.ndarra
 
 
 def background_flood(image: np.ndarray, step: int = FLOOD_STEP, seed_tolerance: int = 16) -> np.ndarray:
-    """Boolean background: everything reachable from the image edges in small colour steps."""
+    """Boolean background: everything reachable from the image edges in small colour steps.
+
+    Runs on a fixed-size working copy: at high resolution product outlines are spread over more
+    pixels, edges get too weak to stop the flood, and it leaks into smooth products. The result
+    is scaled back with nearest neighbour; the protect rim covers the slightly coarser outline.
+    """
+    full_height, full_width = image.shape[:2]
+    scale = min(1.0, FLOOD_WORKING_SIDE / max(full_height, full_width))
+    if scale < 1.0:
+        small = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        background = background_flood(small, step, seed_tolerance)
+        return cv2.resize(background.astype(np.uint8), (full_width, full_height), interpolation=cv2.INTER_NEAREST) > 0
     height, width = image.shape[:2]
     blurred = cv2.GaussianBlur(image, (3, 3), 0)  # JPEG noise would otherwise stop the flood
     flood = np.zeros((height + 2, width + 2), np.uint8)
@@ -106,8 +119,20 @@ def segment_product(image: np.ndarray, method: str = "auto") -> tuple[np.ndarray
         luma = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)[background]
         share, spread = background.mean(), (luma.std() if luma.size else 255.0)
         # a large, fairly even backdrop, or a thin but perfectly even one (product filling the frame)
-        plain = (share >= STUDIO_MIN_SHARE and spread <= STUDIO_MAX_STD) or (share >= 0.01 and spread <= 4)
-        if plain or method == "flood":
+        near_white = float((luma >= 235).mean()) if luma.size else 0.0
+        # a large, fairly even backdrop; a mostly-white one with a reflection or shadow gradient;
+        # or a thin but perfectly even one (product filling the frame)
+        plain = (
+            (share >= STUDIO_MIN_SHARE and (spread <= STUDIO_MAX_STD or near_white >= 0.6))
+            or (share >= 0.01 and spread <= 4)
+        )
+        # A studio backdrop is white or neutral grey; a warm or coloured wall is a room, not a studio.
+        saturation = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)[..., 1][background]
+        neutral = saturation.size > 0 and float(np.median(saturation)) <= STUDIO_MAX_SATURATION
+        # A product in a studio rarely runs off three sides of the frame; furniture and walls in a room do.
+        foreground = ~background
+        sides_touched = sum(float(edge.mean()) > 0.3 for edge in (foreground[0], foreground[-1], foreground[:, 0], foreground[:, -1]))
+        if (plain and neutral and sides_touched < 3) or method == "flood":
             mask = keep_pieces(np.where(background, 0, 255).astype(np.uint8))
             if mask.mean() / 255 >= MIN_PRODUCT_SHARE:
                 return mask, "studio"
@@ -131,11 +156,15 @@ def protect_mask(image: np.ndarray, mask: np.ndarray, mode: str, reach_share: fl
     return np.where((rim > 0) | (near_product & non_white), 255, 0).astype(np.uint8)
 
 
-def split_text_overlays(mask: np.ndarray, boxes: list[np.ndarray], min_cover: float = 0.4) -> tuple[np.ndarray, list[int]]:
-    """Separate pieces that are mostly text (a badge or watermark on the backdrop) are overlays.
+def split_text_overlays(
+    image: np.ndarray, mask: np.ndarray, boxes: list[np.ndarray], min_cover: float = 0.4, badge_cover: float = 0.1,
+) -> tuple[np.ndarray, list[int]]:
+    """Separate pieces that are added graphics (a badge or watermark on the backdrop) are overlays.
 
-    The largest piece is always product; a product with printed text is covered by text over a
-    small share of its area. Returns (mask without overlays, labels of the overlay pieces).
+    A piece outside the main product's outline is an overlay when text covers most of it, or when
+    it carries text AND looks like a badge: a flat single colour filling a rectangle. Products are
+    rarely flat-coloured rectangles. The largest piece is always product.
+    Returns (mask without overlays, labels of the overlay pieces).
     """
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     if count <= 2 or not boxes:
@@ -150,12 +179,21 @@ def split_text_overlays(mask: np.ndarray, boxes: list[np.ndarray], min_cover: fl
     for label in range(1, count):
         if label == largest:
             continue
-        x, y, w, h, _ = stats[label]
+        x, y, w, h, area = stats[label]
         # Text inside the main product's outline is printed on it, never an overlay.
         if cv2.pointPolygonTest(hull, (float(x + w / 2), float(y + h / 2)), False) >= 0:
             continue
-        cover = float((text[y:y + h, x:x + w] > 0).mean())
+        piece = labels[y:y + h, x:x + w] == label
+        on_text = text[y:y + h, x:x + w] > 0
+        cover = float((on_text & piece).sum()) / max(int(piece.sum()), 1)
         if cover >= min_cover:
+            overlays.append(label)
+            continue
+        colours = image[y:y + h, x:x + w][piece & ~on_text].astype(np.int16)
+        # one flat colour: most pixels sit close to the median (letter anti-aliasing is the rest)
+        flat = colours.size > 0 and float((np.abs(colours - np.median(colours, axis=0)).max(axis=1) <= 20).mean()) >= 0.8
+        is_badge = cover >= badge_cover and area / float(w * h) >= 0.8 and flat  # a flat rectangle or pill with text
+        if is_badge:
             overlays.append(label)
     cleaned = mask.copy()
     cleaned[np.isin(labels, overlays)] = 0

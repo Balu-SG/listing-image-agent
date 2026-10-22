@@ -35,7 +35,7 @@ interface Visibility {
 
 interface Step {
   n: number;                  // 1-based
-  tool: string;               // "whiten_background" | "recrop_to_fill" | "pad_to_square" | "remove_border" | "inpaint_watermark" | "upscale" | "finish"
+  tool: string;               // "whiten_background" | "recrop_to_fill" | "pad_to_square" | "remove_border" | "inpaint_watermark" | "finish"
   input: Record<string, unknown>;
   reason: string;             // planner's one-line reason
   outcome: "applied" | "rejected" | "error";
@@ -54,11 +54,13 @@ interface Result {
   visibility_before: Visibility;
   visibility_after: Visibility | null;
   steps: Step[];              // grows while state == "running"
+  current_step: { n: number; tool: string; reason: string } | null;  // the tool running right now
   summary: string | null;     // planner's explanation, set when done
-  needs_reshoot: { rule_id: string; reason: string }[];
-  guarantee: { passed: boolean; changed_product_pixels: number; psnr_db: number | null } | null;
-  // psnr_db is set only when the image was upscaled: the result is shrunk back and compared with the
-  // original (round trip); changed_product_pixels then counts resampling differences > 24 levels.
+  needs_reshoot: { rule_id: string; reason: string }[];  // also lists FIXABLE rules the agent could not fix
+  guarantee: { passed: boolean; changed_product_pixels: number; product_pixels: number; psnr_db: number | null } | null;
+  // product_pixels = how many product pixels were compared
+  // psnr_db is always null now (it was used by an upscaling tool that was removed because Amazon
+  // says not to enlarge small images); kept for compatibility.
   images: {
     original: string;
     overlay: string;          // violations drawn on the original
@@ -66,6 +68,7 @@ interface Result {
     fixed_overlay: string | null;
     diff: string | null;      // product-region difference map (black = unchanged)
   };
+  fixed_download_url: string | null;  // same image as images.fixed, served as an attachment named <name>-fixed.png
   error: string | null;
 }
 ```
@@ -75,10 +78,38 @@ interface Result {
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
 | GET | `/api/health` | | `{ ok: true, planner: "claude" \| "rules", model: string \| null }` |
+| GET | `/api/meta` | | `Meta` (below): explanations for tooltips and help panels |
 | POST | `/api/analyze` | `{ image_base64: string, filename: string }` (JPEG/PNG, <= 4.5 MB decoded; the UI downsizes to 2000px long side first) | `Result` with `state: "analyzed"` |
+| POST | `/api/analyze-url` | `{ url: string }` (https image link: JPEG/PNG/WebP, <= 4.5 MB; private/local addresses rejected) | `Result` with `state: "analyzed"`; 400 with a readable `detail` if the link is rejected |
 | POST | `/api/fix/{id}` | `{}` | `202 { id, state: "running" }` |
 | GET | `/api/results/{id}` | | `Result` (poll every ~1.5 s while `state == "running"`) |
-| GET | `/api/gallery` | | `{ items: { id, filename, score_before, score_after, state, thumb_url }[] }` |
+| GET | `/api/gallery` | | `{ items: { id, filename, score_before, score_after, status_before, status_after, needs_reshoot_count, state, thumb_url, original_thumb_url }[] }` |
 
 Errors: `{ detail: string }` with 400 (bad image), 404 (unknown id), 413 (too large),
 429 (`detail: "Daily demo limit reached"`).
+
+## Meta (help text)
+
+```ts
+interface Meta {
+  marketplace: string;
+  source: { title: string; url: string; read_on: string };  // Amazon Seller Central G1881
+  not_checked: string[];                                      // Amazon rules not checked automatically
+  overlay_legend: { colour: string; label: string }[];       // colours used in images.overlay
+  rules: Record<string, { title: string; basis: "amazon" | "derived" | "ours"; amazon: string | null;
+                          what: string; why: string; how: string; fix: string | null }>; // keyed "R1".."R8"
+  weights: Record<string, number>;
+  tools: Record<string, { label: string; what: string; safety: string }>; // keyed by tool name
+  metrics: {
+    score: string;
+    status: { PASS: string; FIXABLE: string; RESHOOT: string };
+    visibility: string;
+    guarantee: string;
+    diff_map: string;
+    planner: { claude: string; rules: string };
+    segmentation: { studio: string; scene: string };
+  };
+}
+```
+
+Each report's `R1` evidence carries `mode: "scene"` for lifestyle photos.

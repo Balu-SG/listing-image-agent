@@ -29,11 +29,3 @@ def text_detector() -> cv2.dnn.TextDetectionModel_DB:
     detector.setMaxCandidates(200)
     detector.setUnclipRatio(2.0)
     return detector
-
-
-@cache
-def super_res_x2() -> cv2.dnn_superres.DnnSuperResImpl:
-    upscaler = cv2.dnn_superres.DnnSuperResImpl_create()
-    upscaler.readModel(str(model_path("ESPCN_x2.pb")))
-    upscaler.setModel("espcn", 2)
-    return upscaler

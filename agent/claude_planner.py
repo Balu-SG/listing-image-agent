@@ -24,8 +24,8 @@ rejects any call that would change a product pixel or lower the score, and tells
 
 How to work:
 - Plan from the report. Order matters: remove borders and background text first, then whiten the
-  background, then recrop (fill and centring), then pad to square, then upscale (cropping lowers
-  resolution, so upscale last and only if the resolution rule still fails).
+  background, then recrop (fill), then pad to square. Never enlarge an image: Amazon's rules say
+  not to artificially enlarge small images, so a small image needs a better original.
 - Only call a tool when a rule it addresses is FIXABLE. Do not repeat a tool that was rejected or
   failed unless something changed.
 - RESHOOT problems (blur, cut-off product, bad exposure, too small to recover) cannot be fixed by
@@ -58,11 +58,10 @@ TOOLS = [
     _tool("whiten_background", "Set everything outside the product to pure white RGB 255. Fixes R1."),
     _tool(
         "recrop_to_fill",
-        "Reframe to a square around the product so it fills `target` of the frame; also centres it. Fixes R2 and R7.",
+        "Reframe to a square around the product so it fills `target` of the frame; also centres it. Fixes R2.",
         {"target": {"type": "number", "description": "Fill ratio between 0.85 and 0.95; 0.87 is a good default."}},
     ),
     _tool("pad_to_square", "Pad with white to a square canvas."),
-    _tool("upscale", "2x super-resolution. Fixes R3 when the long side is at least half the requirement."),
     {
         "name": "finish",
         "description": "Stop and report to the seller.",

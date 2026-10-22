@@ -5,6 +5,7 @@ Local: uv run uvicorn api.app:app --port 8000
 
 import logging
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 
 from api import service
 from api.storage import make_store
+from core.explain import meta as explain_meta
 
 logging.basicConfig(level=logging.INFO)
 
@@ -41,9 +43,25 @@ def health() -> dict:
     return {"ok": True, "planner": service.planner_setting(), "model": service.model_setting()}
 
 
+@app.get("/api/meta")
+def meta() -> dict:
+    """Explanations for every rule, tool and metric (tooltips and help panels)."""
+    return explain_meta()
+
+
 @app.post("/api/analyze")
 def analyse(body: AnalyseBody) -> dict:
     record = service.analyse(store, body.image_base64, body.filename)
+    return service.public_result(store, record)
+
+
+class AnalyseUrlBody(BaseModel):
+    url: str
+
+
+@app.post("/api/analyze-url")
+def analyse_url(body: AnalyseUrlBody) -> dict:
+    record = service.analyse_url(store, body.url)
     return service.public_result(store, record)
 
 
@@ -66,8 +84,11 @@ def gallery() -> dict:
 
 
 @app.get("/api/files/{key:path}")
-def files(key: str) -> FileResponse:
+def files(key: str, download: str | None = None) -> FileResponse:
     path = store.file_path(key)
     if path is None:
         raise HTTPException(404, "Not found")
-    return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+    headers = {"Cache-Control": "public, max-age=86400"}
+    if download:  # served as an attachment with this filename
+        return FileResponse(path, headers=headers, filename=Path(download).name)
+    return FileResponse(path, headers=headers)

@@ -46,6 +46,8 @@ def fix_image(
     else:
         rule_planner.run(session)
 
+    known = {item["rule_id"] for item in session.needs_reshoot}
+    session.needs_reshoot += [item for item in session.unfixed_from_report() if item["rule_id"] not in known]
     guarantee = session.final_guarantee()
     return {
         "planner": used,
@@ -57,6 +59,7 @@ def fix_image(
         "guarantee": {
             "passed": guarantee.passed,
             "changed_product_pixels": guarantee.changed_pixels,
+            "product_pixels": guarantee.product_pixels,  # how many product pixels were compared
             "psnr_db": guarantee.psnr_db,  # set only after super-resolution: a round-trip check
         },
         "visibility_after": visibility(session.state.image),

@@ -9,6 +9,7 @@ import os
 import threading
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import quote
 
 import cv2
 import numpy as np
@@ -40,8 +41,10 @@ class LocalStore:
         path.write_bytes(data)
         return key
 
-    def url(self, key: str | None) -> str | None:
-        return f"/api/files/{key}" if key else None
+    def url(self, key: str | None, download_name: str | None = None) -> str | None:
+        if not key:
+            return None
+        return f"/api/files/{key}" + (f"?download={quote(download_name)}" if download_name else "")
 
     def file_path(self, key: str) -> Path | None:
         path = (self.root / key).resolve()
@@ -92,10 +95,13 @@ class AwsStore:
         self.s3.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=f"image/{'png' if lossless else 'jpeg'}")
         return key
 
-    def url(self, key: str | None) -> str | None:
+    def url(self, key: str | None, download_name: str | None = None) -> str | None:
         if not key:
             return None
-        return self.s3.generate_presigned_url("get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=6 * 3600)
+        params = {"Bucket": self.bucket, "Key": key}
+        if download_name:
+            params["ResponseContentDisposition"] = f'attachment; filename="{download_name}"'
+        return self.s3.generate_presigned_url("get_object", Params=params, ExpiresIn=6 * 3600)
 
     def file_path(self, key: str) -> Path | None:
         return None

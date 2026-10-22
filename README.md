@@ -15,31 +15,38 @@ Entry for the OpenCV AI Competition 2026 (powered by AWS).
    (scene) photos fall back to U^2-Net-p through `cv2.dnn` for measuring only; their background is
    never edited. Separate pieces mostly covered by detected text (badges, watermarks) are overlays,
    not product.
-2. **Inspect** 8 rules from a YAML rule pack (`core/rulepacks/amazon.yaml`), score 0-100.
+2. **Inspect** 8 rules from a YAML rule pack (`core/rulepacks/amazon.yaml`), score 0-100. The rules
+   follow Amazon's official
+   [Product image requirements (Seller Central G1881)](https://sellercentral.amazon.com/help/hub/reference/external/G1881),
+   read on 22 Oct 2026; each threshold in the rule pack is marked as Amazon's or ours.
 3. **Plan.** Claude receives the inspection JSON (never pixels) and calls fix tools. A deterministic
    rule planner does the same offline, when the demo budget is spent, or if Claude declines.
 4. **Fix and verify.** Each tool is a deterministic OpenCV operation. Before a result is kept the
    session checks that **no product pixel changed** (exact comparison after mapping the original
-   product region through the crop/pad transform; round-trip PSNR >= 35 dB after super-resolution)
-   and that the score did not drop. Rejected calls are reported back to the planner.
+   product region through the crop/pad transform) and that the score did not drop. Rejected calls
+   are reported back to the planner. Images are never enlarged: Amazon says "Do not artificially
+   enlarge small images."
 5. **Search visibility.** The image is shrunk to a mobile search tile among 8 neighbour products
    and scored with spectral-residual saliency (50 = average share of attention).
 
-| Rule | Check | OpenCV technique | Fix tool |
+| Rule | Amazon says | OpenCV technique | Fix |
 | --- | --- | --- | --- |
-| R1 | Pure white background | Channel minimum over the backdrop | `whiten_background` |
-| R2 | Product fills >= 85% | Mask bounding box vs frame | `recrop_to_fill` |
-| R3 | Resolution | Longest side | `upscale` (ESPCN x2, `dnn_superres`) |
-| R4 | No added text or badges | PP-OCRv3 DB detector (`TextDetectionModel_DB`) | `inpaint_watermark` (`cv2.inpaint`) |
-| R5 | No border | Line-by-line uniformity scan from each edge | `remove_border` |
-| R6 | Sharp | Variance of the Laplacian on the product | reshoot |
-| R7 | Centred, not cut off | Mask touching the frame; centre offset | `recrop_to_fill` |
-| R8 | Exposure | Product luminance mean and 99th percentile | reshoot |
+| R1 | "pure white background (RGB 255, 255, 255)" | Channel minimum over the flood-filled backdrop | `whiten_background` |
+| R2 | "Show the product as 85% of the image" | Product bounding box vs frame (longest side) | `recrop_to_fill` |
+| R3 | 500 px minimum, 10,000 max; 1,000+ enables zoom; "do not artificially enlarge" | Longest side | reshoot (never enlarged) |
+| R4 | "No text or pricing details"; no badges such as "Best seller" | PP-OCRv3 DB detector (`TextDetectionModel_DB`) + flat-badge test | `inpaint_watermark` (`cv2.inpaint`) |
+| R5 | (derived) a border is non-white background | Line-by-line uniformity scan from each edge | `remove_border` |
+| R6 | "Clear, non-pixelated, no jagged edges" | Variance of the Laplacian on the product | reshoot |
+| R7 | "Do not cut off any part of the product" | Product touching the frame edge (centring = advice only) | reshoot |
+| R8 | (derived) "accurately represent the ... color" | Product brightness mean and 99th percentile | reshoot |
+
+Not checked automatically: one unit only, props, mannequins, footwear angle, packaging, product
+shown once. `pad_to_square` is our choice (square thumbnails), not an Amazon rule.
 
 ## Results on 60 Amazon Berkeley Objects main images (rule planner)
 
 - Product-unchanged check passed on **60 / 60** images.
-- Average score **94 -> 98**; 54 of 60 reach 100.
+- Average score **94 -> 99**; 56 of 60 reach 100.
 - ~0.3 s per inspection, ~1 s per analysis inside the Lambda container (arm64, 3 GB).
 
 Per-rule precision/recall against hand labels: _pending — `eval/labels.csv`_.
@@ -48,7 +55,7 @@ Per-rule precision/recall against hand labels: _pending — `eval/labels.csv`_.
 
 ```bash
 uv sync
-scripts/fetch_models.sh                                   # U^2-Net-p, PP-OCRv3 DB, ESPCN x2
+scripts/fetch_models.sh                                   # U^2-Net-p, PP-OCRv3 DB
 uv run python scripts/fetch_abo.py --count 60             # sample of ABO main images
 uv run pytest                                             # 23 tests, offline
 
@@ -88,9 +95,9 @@ ALERT_EMAIL=you@example.com scripts/deploy.sh
 - A badge that touches the product (e.g. a "renewed" banner over its base) merges with the product.
 - A lifestyle photo with a large plain wall can pass as a studio shot; props stay as "product".
 - White products on white backdrops: exposure is not judged.
-- Thresholds are our reading of Amazon's style guide, not Amazon's internal algorithm.
+- Amazon's rules are quoted from its help page; the measurement thresholds are ours, not Amazon's internal checks.
 
 ## Credits
 
 - Amazon Berkeley Objects, CC BY 4.0 — sample and neighbour images.
-- U^2-Net-p (Apache-2.0), PP-OCRv3 text detection via OpenCV Zoo (Apache-2.0), ESPCN (TF-ESPCN).
+- U^2-Net-p (Apache-2.0), PP-OCRv3 text detection via OpenCV Zoo (Apache-2.0).

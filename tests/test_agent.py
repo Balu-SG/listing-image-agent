@@ -21,12 +21,13 @@ def off_white_small_product() -> np.ndarray:
 def test_rule_planner_fixes_and_keeps_product():
     outcome = fix_image(off_white_small_product(), planner="rules")
     assert outcome["before"]["score"] < outcome["after"]["score"] == 100
-    # cropping drops the resolution, so the plan ends with a 2x upscale, verified by round trip
     assert [step["tool"] for step in outcome["steps"] if step["outcome"] == "applied"] == [
-        "whiten_background", "recrop_to_fill", "upscale",
+        "whiten_background", "recrop_to_fill",
     ]
     assert outcome["guarantee"]["passed"] is True
-    assert outcome["guarantee"]["psnr_db"] >= 35
+    assert outcome["guarantee"]["changed_product_pixels"] == 0
+    assert outcome["guarantee"]["product_pixels"] > 0
+    assert not any(step["tool"] == "upscale" for step in outcome["steps"])  # Amazon: never enlarge
 
 
 def test_guarantee_catches_a_product_edit():
@@ -79,8 +80,7 @@ def test_claude_planner_loop(monkeypatch):
     client = ScriptedClient([
         _tool_turn("t1", "whiten_background", {"reason": "Background is off-white."}),
         _tool_turn("t2", "recrop_to_fill", {"reason": "Product is small.", "target": 0.88}),
-        _tool_turn("t3", "upscale", {"reason": "Cropping lowered the resolution."}),
-        _tool_turn("t4", "finish", {"summary": "Whitened and recropped.", "needs_reshoot": []}),
+        _tool_turn("t3", "finish", {"summary": "Whitened and recropped.", "needs_reshoot": []}),
     ])
     monkeypatch.setattr(claude_planner, "make_client", lambda: (client, "claude-opus-5-5"))
     outcome = fix_image(off_white_small_product(), planner="claude")
@@ -88,13 +88,12 @@ def test_claude_planner_loop(monkeypatch):
     assert outcome["planner"] == "claude"
     assert outcome["summary"] == "Whitened and recropped."
     assert outcome["after"]["score"] == 100
-    assert [step["reason"] for step in outcome["steps"]] == [
-        "Background is off-white.", "Product is small.", "Cropping lowered the resolution.",
-    ]
+    assert [step["reason"] for step in outcome["steps"]] == ["Background is off-white.", "Product is small."]
     # every tool result went back to Claude with the matching id
     second_request = client.calls[1]["messages"]
     assert second_request[-1]["content"][0]["tool_use_id"] == "t1"
     assert all(tool.get("strict") for tool in client.calls[0]["tools"])
+    assert "upscale" not in {tool["name"] for tool in client.calls[0]["tools"]}
 
 
 def test_claude_refusal_falls_back_to_rules(monkeypatch):

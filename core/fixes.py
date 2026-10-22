@@ -1,8 +1,8 @@
 """Deterministic OpenCV fix tools and the product-unchanged guarantee.
 
 Every tool takes and returns a FixState. Pixel tools only write OUTSIDE the protect mask;
-geometry tools (crop, pad, scale) move the canvas but never resample the product, except
-`upscale`, which is checked by similarity instead of exact equality.
+geometry tools (crop, pad) move the canvas but never resample the product. There is no
+upscaling tool: Amazon's image requirements say "Do not artificially enlarge small images."
 
 The state carries the transform from original to current coordinates, so the product region
 of the original can always be mapped onto the current image and compared.
@@ -13,7 +13,6 @@ from dataclasses import dataclass, replace
 import cv2
 import numpy as np
 
-from core import models
 from core.rules import border_band, find_border, text_boxes
 from core.types import Context
 
@@ -26,7 +25,6 @@ class FixState:
     mask: np.ndarray       # tight product mask in current coordinates
     protect: np.ndarray    # protect mask in current coordinates
     mode: str = "studio"   # only a studio (plain backdrop) image may have its background edited
-    scale: float = 1.0     # current = original * scale + offset
     offset_x: float = 0.0
     offset_y: float = 0.0
 
@@ -91,6 +89,11 @@ def recrop_to_fill(state: FixState, ctx_config: dict, target: float | None = Non
     x, y, w, h = _bbox(state.mask)
     px, py, pw, ph = _bbox(state.protect)
     side = int(np.ceil(max(w, h) / target))
+    # Zoom needs 1,000+ px. Loosen the fill toward Amazon's 85% if that keeps the frame at zoom size;
+    # never enlarge (Amazon: "Do not artificially enlarge small images").
+    zoom, loosest = ctx_config["resolution"]["zoom_long_side"], int(np.floor(max(w, h) / ctx_config["fill"]["pass_ratio"]))
+    if side < zoom <= loosest:
+        side = zoom
     side = max(side, pw, ph)  # never cut protected pixels
     cx, cy = x + w / 2, y + h / 2
     x0 = int(round(cx - side / 2))
@@ -102,6 +105,8 @@ def recrop_to_fill(state: FixState, ctx_config: dict, target: float | None = Non
 
 
 def pad_to_square(state: FixState, ctx_config: dict) -> FixState:
+    if state.mode != "studio":
+        raise FixError("scene photo: white padding would not match the scene; a studio photo is needed")
     height, width = state.image.shape[:2]
     side = max(height, width)
     return _reframe(state, -((side - width) // 2), -((side - height) // 2), side, side)
@@ -146,31 +151,12 @@ def inpaint_watermark(state: FixState, ctx_config: dict) -> FixState:
     return replace(state, image=image)
 
 
-def upscale(state: FixState, ctx_config: dict) -> FixState:
-    """2x ESPCN super-resolution (masks scaled with nearest neighbour)."""
-    if max(state.image.shape[:2]) >= ctx_config["resolution"]["pass_long_side"]:
-        raise FixError("resolution already sufficient")
-    image = models.super_res_x2().upsample(state.image)
-    size = (image.shape[1], image.shape[0])
-    protect = cv2.resize(state.protect, size, interpolation=cv2.INTER_NEAREST)
-    # Super-resolution rings faintly on flat white; background that was pure white stays pure white.
-    was_white = cv2.resize((state.image.min(axis=2) == 255).astype(np.uint8), size, interpolation=cv2.INTER_NEAREST) > 0
-    image[was_white & (protect == 0)] = WHITE
-    return replace(
-        state, image=image,
-        mask=cv2.resize(state.mask, size, interpolation=cv2.INTER_NEAREST),
-        protect=protect,
-        scale=state.scale * 2, offset_x=state.offset_x * 2, offset_y=state.offset_y * 2,
-    )
-
-
 TOOLS = {
     "whiten_background": whiten_background,
     "recrop_to_fill": recrop_to_fill,
     "pad_to_square": pad_to_square,
     "remove_border": remove_border,
     "inpaint_watermark": inpaint_watermark,
-    "upscale": upscale,
 }
 
 
@@ -179,45 +165,24 @@ class Guarantee:
     passed: bool
     changed_pixels: int
     product_pixels: int
-    psnr_db: float | None
+    psnr_db: float | None  # unused since the upscaling tool was removed; kept for the API shape
     diff: np.ndarray  # BGR visualisation in current coordinates
 
 
 def check_product_unchanged(original: np.ndarray, original_protect: np.ndarray, state: FixState) -> Guarantee:
     """Map the original product region into current coordinates and compare pixel by pixel.
 
-    Exact comparison when the canvas was only moved (scale 1); PSNR >= 35 dB after super-resolution.
-    The diff image is black where nothing changed and red where product pixels differ.
+    Tools only crop and pad (integer translations), so the comparison is exact: any changed
+    product pixel fails the check. The diff image is black outside the product, grey where the
+    product is unchanged and red where a product pixel differs.
     """
     height, width = state.image.shape[:2]
-    # After super-resolution, compare at the ORIGINAL scale: shrinking the upscaled image back must
-    # reproduce the original product (a round trip), which proves only resolution changed.
-    current = state.image
-    if state.scale != 1:
-        current = cv2.resize(state.image, None, fx=1 / state.scale, fy=1 / state.scale, interpolation=cv2.INTER_AREA)
-    transform = np.float32([[1, 0, state.offset_x / state.scale], [0, 1, state.offset_y / state.scale]])
-    size = (current.shape[1], current.shape[0])
-    reference = cv2.warpAffine(original, transform, size, flags=cv2.INTER_NEAREST, borderValue=WHITE)
-    region = cv2.warpAffine(original_protect, transform, size, flags=cv2.INTER_NEAREST) > 0
-    if state.scale != 1:
-        region = cv2.erode(region.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0  # skip resampled edges
+    transform = np.float32([[1, 0, state.offset_x], [0, 1, state.offset_y]])
+    reference = cv2.warpAffine(original, transform, (width, height), flags=cv2.INTER_NEAREST, borderValue=WHITE)
+    region = cv2.warpAffine(original_protect, transform, (width, height), flags=cv2.INTER_NEAREST) > 0
+    changed = region & (np.abs(reference.astype(np.int16) - state.image.astype(np.int16)).max(axis=2) > 0)
 
-    difference = np.abs(reference.astype(np.int16) - current.astype(np.int16)).max(axis=2)
-    changed = region & (difference > (0 if state.scale == 1 else 24))
-    product_pixels = int(region.sum())
-
-    psnr = None
-    if state.scale == 1:
-        passed = not changed.any()
-    else:
-        errors = (reference.astype(np.float32) - current.astype(np.float32))[region]
-        mse = float((errors**2).mean()) if product_pixels else 0.0
-        psnr = 99.0 if mse == 0 else 10 * np.log10(255.0**2 / mse)
-        passed = psnr >= 35.0
-
-    diff = np.zeros((*size[::-1], 3), np.uint8)
+    diff = np.zeros((height, width, 3), np.uint8)
     diff[region] = (40, 40, 40)            # product region, unchanged
     diff[changed] = (0, 0, 255)            # changed product pixels
-    if state.scale != 1:
-        diff = cv2.resize(diff, (width, height), interpolation=cv2.INTER_NEAREST)
-    return Guarantee(bool(passed), int(changed.sum()), product_pixels, None if psnr is None else round(float(psnr), 1), diff)
+    return Guarantee(not bool(changed.any()), int(changed.sum()), int(region.sum()), None, diff)

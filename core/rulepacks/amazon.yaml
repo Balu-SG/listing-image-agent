@@ -1,21 +1,25 @@
-# Amazon main-image rule pack. Thresholds are our interpretation of the published
-# style guide, not Amazon's internal algorithm; tune them against eval/labels.csv.
+# Amazon main-image rule pack.
+# Source: Amazon Seller Central help article G1881 "Product image requirements"
+#   https://sellercentral.amazon.com/help/hub/reference/external/G1881 (read 22 Oct 2026)
+# Values marked [Amazon] are stated there; values marked [ours] are our measurement choices,
+# not Amazon's internal algorithm, and are tuned against eval/labels.csv.
 marketplace: amazon
 segmentation: auto            # auto (flood if plain backdrop, else u2net) | flood | u2net
 
 background:
-  pure_value: 255             # every channel must be >= this to count as pure white
+  pure_value: 255             # [Amazon] RGB 255,255,255; every channel must be >= this to count as pure white
   near_white_value: 235       # whiter than this is "off-white", fixable by whitening
   pass_share: 0.98            # share of background pixels that must be pure white
   edge_margin: 0.01           # ignore a band this wide (share of long side) around the product edge
 
 fill:
-  pass_ratio: 0.85            # product's longest side / frame side
+  pass_ratio: 0.85            # [Amazon] "show the product as 85% of the image"; [ours] measured on the longest side
   target_ratio: 0.87          # what recrop_to_fill aims for
 
 resolution:
-  pass_long_side: 1000        # zoom-enabled; some sources say 1600, confirm in Seller Central
-  hard_min_long_side: 500     # below this after any fix = reshoot
+  min_long_side: 500          # [Amazon] images below 500 px on the longest side cannot be uploaded
+  max_long_side: 10000        # [Amazon] maximum 10,000 px on the longest side
+  zoom_long_side: 1000        # [Amazon] 1,000+ px recommended; enables zoom (advice, not a failure)
 
 text:
   max_long_side: 960          # detector input size (multiple of 32)
@@ -31,7 +35,7 @@ sharpness:
 
 framing:
   edge_touch_share: 0.02      # product touching the frame along this much of a side = cut off
-  max_center_offset: 0.08     # bbox centre offset as share of frame
+  max_center_offset: 0.08     # [ours] advice only; Amazon has no centring rule
 
 exposure:
   min_judged_share: 0.3       # below this the product is mostly white and exposure is not judged

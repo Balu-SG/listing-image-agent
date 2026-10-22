@@ -7,6 +7,10 @@ from core import models
 from core.types import Context, RuleResult, Status
 
 
+def _count(number: int, noun: str) -> str:
+    return f"{number} {noun}" + ("" if number == 1 else "s")
+
+
 def _bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
     points = cv2.findNonZero(mask)
     if points is None:
@@ -75,12 +79,20 @@ def r2_fill(ctx: Context) -> RuleResult:
     if ratio >= cfg["pass_ratio"]:
         return RuleResult("R2", "Product fills 85% of frame", Status.PASS, ratio, f"Product fills {ratio:.0%}.", evidence=evidence)
 
-    cropped_long_side = max(w, h) / cfg["target_ratio"]
-    evidence["long_side_after_crop"] = round(cropped_long_side)
-    if cropped_long_side < ctx.config["resolution"]["hard_min_long_side"]:
+    if ctx.mode == "scene":
         return RuleResult(
             "R2", "Product fills 85% of frame", Status.RESHOOT, ratio,
-            f"Product fills {ratio:.0%}; cropping would leave only {cropped_long_side:.0f}px.", evidence=evidence,
+            f"Product fills about {ratio:.0%}; in a scene photo the outline is uncertain, so it is not cropped. "
+            "Reshoot the product alone, filling the frame.",
+            evidence=evidence,
+        )
+    cropped_long_side = max(w, h) / cfg["target_ratio"]
+    evidence["long_side_after_crop"] = round(cropped_long_side)
+    if cropped_long_side < ctx.config["resolution"]["min_long_side"]:
+        return RuleResult(
+            "R2", "Product fills 85% of frame", Status.RESHOOT, ratio,
+            f"Product fills {ratio:.0%}; cropping would leave only {cropped_long_side:.0f} px, under Amazon's 500 px minimum.",
+            evidence=evidence,
         )
     return RuleResult(
         "R2", "Product fills 85% of frame", Status.FIXABLE, ratio,
@@ -89,18 +101,30 @@ def r2_fill(ctx: Context) -> RuleResult:
 
 
 def r3_resolution(ctx: Context) -> RuleResult:
+    """Amazon: minimum 500 px and maximum 10,000 px on the longest side; 1,000+ px recommended
+    (enables zoom); do not artificially enlarge small images. So nothing here is fixable by editing."""
     cfg = ctx.config["resolution"]
     long_side = max(ctx.height, ctx.width)
-    evidence = {"width": ctx.width, "height": ctx.height}
-    if long_side >= cfg["pass_long_side"]:
-        return RuleResult("R3", "Resolution", Status.PASS, 1.0, f"Longest side is {long_side}px.", evidence=evidence)
-    value = long_side / cfg["pass_long_side"]
-    if long_side * 2 >= cfg["pass_long_side"] and long_side >= cfg["hard_min_long_side"]:
+    evidence = {"width": ctx.width, "height": ctx.height, "zoom": long_side >= cfg["zoom_long_side"]}
+    if long_side < cfg["min_long_side"]:
         return RuleResult(
-            "R3", "Resolution", Status.FIXABLE, value,
-            f"Longest side is {long_side}px; a 2x upscale reaches {cfg['pass_long_side']}px.", ["upscale"], evidence,
+            "R3", "Image size", Status.RESHOOT, long_side / cfg["min_long_side"],
+            f"Longest side is {long_side} px; Amazon will not accept images under {cfg['min_long_side']} px.", evidence=evidence,
         )
-    return RuleResult("R3", "Resolution", Status.RESHOOT, value, f"Longest side is only {long_side}px.", evidence=evidence)
+    if long_side > cfg["max_long_side"]:
+        return RuleResult(
+            "R3", "Image size", Status.RESHOOT, 0.5,
+            f"Longest side is {long_side} px; Amazon's maximum is {cfg['max_long_side']:,} px. Export a smaller file.",
+            evidence=evidence,
+        )
+    if long_side < cfg["zoom_long_side"]:
+        return RuleResult(
+            "R3", "Image size", Status.PASS, long_side / cfg["zoom_long_side"],
+            f"Longest side is {long_side} px: accepted, but zoom needs {cfg['zoom_long_side']:,}+ px. "
+            "Use a larger original; Amazon says not to enlarge small images.",
+            evidence=evidence,
+        )
+    return RuleResult("R3", "Image size", Status.PASS, 1.0, f"Longest side is {long_side} px; zoom is enabled.", evidence=evidence)
 
 
 def r4_text(ctx: Context) -> RuleResult:
@@ -115,11 +139,11 @@ def r4_text(ctx: Context) -> RuleResult:
 
     evidence = {"added_text_boxes": added, "product_text_boxes": printed}
     if not added:
-        reason = "No added text." if not printed else f"{len(printed)} text area(s) are on the product itself (allowed)."
+        reason = "No added text." if not printed else f"{_count(len(printed), 'text area')} printed on the product itself (allowed)."
         return RuleResult("R4", "No added text or badges", Status.PASS, 1.0, reason, evidence=evidence)
     return RuleResult(
         "R4", "No added text or badges", Status.FIXABLE, 0.0,
-        f"{len(added)} text area(s) sit on the background, likely badges or watermarks.", ["inpaint_watermark"], evidence,
+        f"{_count(len(added), 'text area')} on the background, likely a badge or watermark.", ["inpaint_watermark"], evidence,
     )
 
 
@@ -209,7 +233,7 @@ def r7_framing(ctx: Context) -> RuleResult:
     cfg = ctx.config["framing"]
     bbox = _bbox(ctx.mask)
     if bbox is None:
-        return RuleResult("R7", "Centred, not cut off", Status.RESHOOT, 0.0, "No product found.")
+        return RuleResult("R7", "Whole product in frame", Status.RESHOOT, 0.0, "No product found.")
     product = ctx.mask > 0
     touching = {
         "top": product[0, :].mean(), "bottom": product[-1, :].mean(),
@@ -224,15 +248,16 @@ def r7_framing(ctx: Context) -> RuleResult:
     opposite_pairs = ({"top", "bottom"} <= set(cut_sides)) or ({"left", "right"} <= set(cut_sides))
     if cut_sides and not opposite_pairs:
         return RuleResult(
-            "R7", "Centred, not cut off", Status.RESHOOT, 0.0, f"Product is cut off at the {', '.join(cut_sides)} edge.",
+            "R7", "Whole product in frame", Status.RESHOOT, 0.0, f"Product is cut off at the {', '.join(cut_sides)} edge.",
             evidence=evidence,
         )
     if offset > cfg["max_center_offset"]:
+        # Amazon does not require centring; this is advice and does not lower the score.
         return RuleResult(
-            "R7", "Centred, not cut off", Status.FIXABLE, 1 - offset, f"Product is off-centre by {offset:.0%}.",
-            ["recrop_to_fill", "pad_to_square"], evidence,
+            "R7", "Whole product in frame", Status.PASS, 1 - offset,
+            f"Product is whole, but off-centre by {offset:.0%} (advice only, not an Amazon rule).", evidence=evidence,
         )
-    return RuleResult("R7", "Centred, not cut off", Status.PASS, 1.0, "Product is centred and whole.", evidence=evidence)
+    return RuleResult("R7", "Whole product in frame", Status.PASS, 1.0, "Product is whole and centred.", evidence=evidence)
 
 
 def r8_exposure(ctx: Context) -> RuleResult:

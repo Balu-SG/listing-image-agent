@@ -40,13 +40,20 @@ def test_small_product_needs_recrop():
     assert result["R2"] == "FIXABLE"
 
 
-def test_low_resolution():
-    assert statuses(product_on(255, size=600))["R3"] == "FIXABLE"
+def test_image_size_follows_amazon():
+    """Amazon: 500 px minimum (reshoot below), 1,000+ px recommended for zoom (a note, not a failure)."""
+    assert statuses(product_on(255, size=600))["R3"] == "PASS"
     assert statuses(product_on(255, size=400))["R3"] == "RESHOOT"
+    report, _ = inspect_image(product_on(255, size=600), segmentation="flood")
+    r3 = next(rule for rule in report["rules"] if rule["rule_id"] == "R3")
+    assert r3["evidence"]["zoom"] is False and "zoom" in r3["reason"]
 
 
-def test_off_centre_product_is_fixable():
-    assert statuses(product_on(255, fill=0.6, offset=(200, 0)))["R7"] == "FIXABLE"
+def test_off_centre_is_advice_only():
+    """Amazon has no centring rule, so off-centre is noted but does not fail."""
+    report, _ = inspect_image(product_on(255, fill=0.6, offset=(200, 0)), segmentation="flood")
+    r7 = next(rule for rule in report["rules"] if rule["rule_id"] == "R7")
+    assert r7["status"] == "PASS" and "off-centre" in r7["reason"]
 
 
 def test_cut_off_product_needs_reshoot():

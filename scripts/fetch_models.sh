@@ -11,4 +11,3 @@ fetch() {
 
 fetch u2netp.onnx https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx
 fetch text_detection_ppocrv3_en.onnx https://huggingface.co/opencv/text_detection_ppocr/resolve/main/text_detection_en_ppocrv3_2023may.onnx
-fetch ESPCN_x2.pb https://github.com/fannymonori/TF-ESPCN/raw/master/export/ESPCN_x2.pb

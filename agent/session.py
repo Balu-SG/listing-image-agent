@@ -50,6 +50,7 @@ class Session:
     before: dict
     on_step: Callable[["Session"], None] = lambda session: None
     steps: list[Step] = field(default_factory=list)
+    current: dict | None = None  # the tool running right now, for the UI
     summary: str | None = None
     needs_reshoot: list[dict] = field(default_factory=list)
 
@@ -69,11 +70,14 @@ class Session:
     def _record(self, tool: str, args: dict, reason: str, outcome: str, detail: str, score: int | None) -> dict:
         step = Step(len(self.steps) + 1, tool, args, reason, outcome, detail, score)
         self.steps.append(step)
+        self.current = None
         self.on_step(self)
         return {"outcome": outcome, "detail": detail, **compact_report(self.report)}
 
     def apply(self, tool: str, args: dict, reason: str) -> dict:
         """Run one fix tool. Returns a JSON-able observation for the planner."""
+        self.current = {"n": len(self.steps) + 1, "tool": tool, "reason": reason}
+        self.on_step(self)
         if tool not in TOOLS:
             return self._record(tool, args, reason, "error", f"unknown tool {tool}", None)
         if self.applied_count >= MAX_APPLIED_STEPS:
@@ -95,8 +99,6 @@ class Session:
 
         self.state, self.report = candidate, report
         detail = f"product pixels changed: {guarantee.changed_pixels}"
-        if guarantee.psnr_db is not None:
-            detail += f" (after 2x upscale, PSNR {guarantee.psnr_db:.1f} dB)"
         return self._record(tool, args, reason, "applied", detail, report["score"])
 
     def finish(self, summary: str, needs_reshoot: list[dict]) -> None:
@@ -112,3 +114,14 @@ class Session:
     def reshoot_from_report(self) -> list[dict]:
         return [{"rule_id": rule["rule_id"], "reason": rule["reason"]}
                 for rule in self.report["rules"] if rule["status"] == "RESHOOT"]
+
+    def unfixed_from_report(self) -> list[dict]:
+        """FIXABLE rules the planner could not fix (a tool refused or failed); they need a person."""
+        failed = {step.tool: step.detail for step in self.steps if step.outcome != "applied"}
+        unfixed = []
+        for rule in self.report["rules"]:
+            if rule["status"] != "FIXABLE":
+                continue
+            why = next((failed[tool] for tool in rule["fix_tools"] if tool in failed), "no safe automatic fix")
+            unfixed.append({"rule_id": rule["rule_id"], "reason": f"Not fixed automatically ({why}). {rule['reason']}"})
+        return unfixed

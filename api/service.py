@@ -8,12 +8,14 @@ import logging
 import os
 import threading
 import uuid
+from pathlib import Path
 
 import cv2
 import numpy as np
 
 from agent.runner import analyse_image, fix_image
 from agent.session import Session
+from api.fetch_url import UrlRejected, fetch_image
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +78,7 @@ def analyse(store, image_base64: str, filename: str, gallery: bool = False) -> d
         "visibility_before": _put_visibility(store, result_id, "vis_before", analysis["visibility"]),
         "visibility_after": None,
         "steps": [],
+        "current_step": None,
         "summary": None,
         "needs_reshoot": [],
         "guarantee": None,
@@ -88,6 +91,15 @@ def analyse(store, image_base64: str, filename: str, gallery: bool = False) -> d
     }
     store.save_result(record)
     return record
+
+
+def analyse_url(store, url: str) -> dict:
+    """Same as analyse, for an image fetched from an https link (see api/fetch_url.py)."""
+    try:
+        data, name = fetch_image(url)
+    except UrlRejected as error:
+        raise ApiError(400, str(error)) from error
+    return analyse(store, base64.b64encode(data).decode(), name)
 
 
 def choose_planner(store) -> str:
@@ -111,11 +123,13 @@ def run_fix(store, result_id: str) -> None:
 
         def on_step(session: Session) -> None:
             record["steps"] = [step.to_dict() for step in session.steps]
+            record["current_step"] = session.current
             store.save_result(record)
 
         outcome = fix_image(image, planner=planner, on_step=on_step)
         record.update({
             "state": "done",
+            "current_step": None,
             "planner": outcome["planner"],
             "after": outcome["after"],
             "steps": outcome["steps"],
@@ -177,6 +191,7 @@ def public_result(store, record: dict) -> dict:
         "visibility_before": visibility(record["visibility_before"]),
         "visibility_after": visibility(record["visibility_after"]),
         "images": {name: store.url(key) for name, key in files.items()},
+        "fixed_download_url": store.url(files.get("fixed"), f"{Path(record['filename']).stem}-fixed.png") if files.get("fixed") else None,
     }
 
 
@@ -187,8 +202,12 @@ def gallery_items(store) -> list[dict]:
             "filename": record["filename"],
             "score_before": record["before"]["score"],
             "score_after": record["after"]["score"] if record.get("after") else None,
+            "status_before": record["before"]["status"],
+            "status_after": record["after"]["status"] if record.get("after") else None,
+            "needs_reshoot_count": len(record.get("needs_reshoot") or []),
             "state": record["state"],
             "thumb_url": store.url(record["files"].get("fixed") or record["files"]["original"]),
+            "original_thumb_url": store.url(record["files"]["original"]),
         }
         for record in store.gallery()
     ]
