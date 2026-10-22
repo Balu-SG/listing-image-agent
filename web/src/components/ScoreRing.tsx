@@ -1,21 +1,33 @@
 import type { Status } from '../types';
 import { STATUS_TEXT, cx } from '../lib';
 
-/** Circular 0-100 score gauge, coloured by status. */
-export function ScoreRing({ score, status, size = 128, label }: { score: number; status: Status; size?: number; label?: string }) {
-  const stroke = Math.max(6, size * 0.08);
+/** Thin circular 0-100 gauge, coloured by status. */
+export function ScoreRing({
+  score,
+  status,
+  size = 72,
+  label,
+  dim = false,
+}: {
+  score: number;
+  status: Status;
+  size?: number;
+  label?: string;
+  dim?: boolean;
+}) {
+  const stroke = Math.max(3, Math.round(size * 0.055));
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(100, score)) / 100;
   return (
     <div
-      className={cx('relative inline-grid shrink-0 place-items-center', STATUS_TEXT[status])}
+      className={cx('relative inline-grid shrink-0 place-items-center', STATUS_TEXT[status], dim && 'opacity-70')}
       style={{ width: size, height: size }}
       role="img"
       aria-label={`${label ?? 'Score'} ${Math.round(score)} out of 100`}
     >
       <svg width={size} height={size} className="-rotate-90" aria-hidden>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--c-surface-2)" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--c-surface-3)" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -30,12 +42,9 @@ export function ScoreRing({ score, status, size = 128, label }: { score: number;
         />
       </svg>
       <div className="absolute inset-0 grid place-items-center">
-        <div className="text-center leading-none">
-          <div className="font-bold tabular-nums" style={{ fontSize: size * 0.3 }}>
-            {Math.round(score)}
-          </div>
-          {label && <div className="mt-1 text-[11px] font-medium tracking-wide text-muted uppercase">{label}</div>}
-        </div>
+        <span className="num font-semibold tracking-tight text-fg" style={{ fontSize: Math.round(size * 0.32) }}>
+          {Math.round(score)}
+        </span>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import type { Gallery, Health, Result } from './types';
+import type { Gallery, Health, Meta, Result } from './types';
 
 export const API_BASE: string = import.meta.env.VITE_API_BASE ?? '';
 export const MOCK = import.meta.env.VITE_MOCK === '1';
@@ -14,11 +14,12 @@ export class ApiError extends Error {
 /** Turn an API error into the sentence we show the user. */
 export function friendlyError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.status === 429) return 'Daily demo limit reached. Please try again tomorrow, or browse the gallery.';
+    if (err.status === 429) return 'The daily demo limit has been reached. Try again tomorrow, or open one of the examples.';
+    if (err.status === 404) return 'That result no longer exists. It may have expired.';
     if (err.status === 413) return err.message || 'That image is too large. Try a smaller file.';
     return err.message;
   }
-  if (err instanceof TypeError) return 'Could not reach the API. Is the backend running?';
+  if (err instanceof TypeError) return 'Could not reach the inspection service. Check your connection and try again.';
   if (err instanceof Error) return err.message;
   return 'Something went wrong.';
 }
@@ -55,9 +56,11 @@ async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown):
 }
 
 export const api = {
+  meta: () => request<Meta>('GET', '/api/meta'),
   health: () => request<Health>('GET', '/api/health'),
   analyze: (image_base64: string, filename: string) =>
     request<Result>('POST', '/api/analyze', { image_base64, filename }),
+  analyzeUrl: (url: string) => request<Result>('POST', '/api/analyze-url', { url }),
   fix: (id: string) => request<{ id: string; state: 'running' }>('POST', `/api/fix/${encodeURIComponent(id)}`, {}),
   result: (id: string) => request<Result>('GET', `/api/results/${encodeURIComponent(id)}`),
   gallery: () => request<Gallery>('GET', '/api/gallery'),

@@ -2,7 +2,7 @@
 // with agent steps appearing one by one. Every image is drawn on a canvas, so no
 // external assets are needed.
 import { ApiError } from './api';
-import type { Gallery, GalleryItem, Health, Report, Result, RuleResult, Status, Step } from './types';
+import type { Gallery, GalleryItem, Guarantee, Health, Meta, Report, Result, RuleResult, Status, Step } from './types';
 
 const SIZE = 800;
 const STEP_INTERVAL_MS = 1700;
@@ -219,13 +219,13 @@ function gridImage(s: Scene, saliency: boolean, strength: number): string {
 
 const RULE_NAMES: Record<string, string> = {
   R1: 'Pure white background',
-  R2: 'Product fills at least 85% of frame',
-  R3: 'Resolution at least 1000 px',
-  R4: 'No added text, logos or badges',
-  R5: 'No border',
-  R6: 'Sharp focus',
-  R7: 'Centred, not cut off',
-  R8: 'Correct exposure',
+  R2: 'Product fills 85% of the image',
+  R3: 'Image size',
+  R4: 'No added text or badges',
+  R5: 'No border or frame',
+  R6: 'Sharp, in focus',
+  R7: 'Whole product in frame',
+  R8: 'Exposure',
 };
 
 function rule(id: string, status: Status, value: number, reason: string, fix_tools: string[] = []): RuleResult {
@@ -247,6 +247,7 @@ interface Fixture {
   summary: string;
   needs_reshoot: { rule_id: string; reason: string }[];
   vis: [number, number];
+  guarantee: Guarantee;
 }
 
 function fixtureA(): Fixture {
@@ -293,11 +294,11 @@ function fixtureA(): Fixture {
     },
     {
       n: 3,
-      tool: 'upscale',
-      input: { factor: 2 },
-      reason: 'Check whether more resolution would help zoom.',
+      tool: 'pad_to_square',
+      input: {},
+      reason: 'Try squaring the canvas before whitening.',
       outcome: 'rejected',
-      detail: 'Image is already 2000 px on the long side; R3 passes, so upscaling would add no detail.',
+      detail: 'rejected: score would drop 63 -> 60',
       score_after: null,
     },
     {
@@ -344,9 +345,10 @@ function fixtureA(): Fixture {
     after,
     steps,
     summary:
-      'I removed the grey frame and the "30% OFF" badge, whitened the beige background outside the product mask, and recropped so the bottle fills 88% of the frame. Upscaling was unnecessary. Every edit touched background pixels only: the product region is bit-identical to your upload.',
+      'I removed the grey frame and the "30% OFF" badge, whitened the beige background outside the product mask, and recropped so the bottle fills 88% of the frame. Every edit touched background pixels only: the product region is bit-identical to your upload.',
     needs_reshoot: [],
     vis: [38, 67],
+    guarantee: { passed: true, changed_product_pixels: 0, product_pixels: 241_388, psnr_db: null },
   };
 }
 
@@ -356,9 +358,9 @@ function fixtureB(): Fixture {
   const before = report(48, [
     rule('R1', 'FIXABLE', 0.55, 'Background is light grey RGB(223,227,232).', ['whiten_background']),
     rule('R2', 'FIXABLE', 0.7, 'Product fills 70% of the longest side; Amazon requires at least 85%.', ['recrop_to_fill']),
-    rule('R3', 'PASS', 1, 'Image is 1600 × 1600 px.'),
+    { ...rule('R3', 'PASS', 1, 'Longest side is 900 px: accepted, but zoom needs 1,000+ px.'), evidence: { width: 900, height: 900, zoom: false } },
     rule('R4', 'PASS', 1, 'No text, logos or badges detected outside the product.'),
-    rule('R5', 'PASS', 1, 'No border detected.'),
+    rule('R5', 'FIXABLE', 0.4, 'Thin 6 px frame along the bottom edge.', ['remove_border']),
     rule('R6', 'RESHOOT', 0.28, 'Image is soft (Laplacian variance 41, threshold 100); sharpening would alter product pixels.'),
     rule('R7', 'PASS', 0.95, 'Product is centred and fully inside the frame.'),
     rule('R8', 'PASS', 0.8, 'Exposure is balanced.'),
@@ -408,10 +410,182 @@ function fixtureB(): Fixture {
     ],
     summary:
       'Background whitened and the product recropped to 87% fill. The photo is out of focus; sharpening would change product pixels, so I left it and flagged it for a reshoot.',
-    needs_reshoot: [{ rule_id: 'R6', reason: 'Image is soft (Laplacian variance 41). Reshoot with a tripod and focus on the label.' }],
+    needs_reshoot: [
+      { rule_id: 'R6', reason: 'Image is soft (Laplacian variance 41). Reshoot with a tripod and focus on the label.' },
+      { rule_id: 'R5', reason: 'Not fixed automatically (the border touches the product). Thin 6 px frame along the bottom edge.' },
+    ],
     vis: [44, 58],
+    guarantee: { passed: true, changed_product_pixels: 0, product_pixels: 338_623, psnr_db: null },
   };
 }
+
+// ---------------------------------------------------------------- meta (mirrors GET /api/meta)
+
+const META: Meta = {
+  "marketplace": "amazon",
+  "source": {
+    "title": "Amazon Seller Central: Product image requirements (G1881)",
+    "url": "https://sellercentral.amazon.com/help/hub/reference/external/G1881",
+    "read_on": "2026-10-22"
+  },
+  "not_checked": [
+    "Only one unit of the product, plus accessories included with it",
+    "No props that are not included with the product",
+    "No mannequins; clothing in adult sizes on a standing model",
+    "Footwear: a single shoe facing left at a 45-degree angle",
+    "No packaging unless it is an important product feature",
+    "Product shown only once (not front and back together)"
+  ],
+  "overlay_legend": [
+    {
+      "colour": "#1478d2",
+      "label": "Protected product outline"
+    },
+    {
+      "colour": "#eb9600",
+      "label": "To change: off-white backdrop, or product too small"
+    },
+    {
+      "colour": "#dc2626",
+      "label": "To remove or reshoot: added text, border, cut-off edge"
+    }
+  ],
+  "rules": {
+    "R1": {
+      "title": "Pure white background",
+      "basis": "amazon",
+      "amazon": "Have a pure white background (RGB color values: 255, 255, 255). Only a limited number of product types are allowed to have a lifestyle image as a main image.",
+      "what": "The backdrop around the product must be pure white (RGB 255, 255, 255).",
+      "why": "Amazon requires it so search and product pages look consistent; a main image that breaks the rules can get the listing removed from search.",
+      "how": "We find the backdrop by flood-filling inward from the image edges, then count how much of it is exactly 255 (at least 98%, our threshold). Lifestyle photos are flagged for a reshoot; most product types may not use one.",
+      "fix": "whiten_background"
+    },
+    "R2": {
+      "title": "Product fills 85% of the image",
+      "basis": "amazon",
+      "amazon": "Show the product as 85% of the image.",
+      "what": "The product should take up 85% of the image.",
+      "why": "Amazon's requirement; a small product also looks weak as a search thumbnail.",
+      "how": "We measure the product's longest side against the image (our reading of \"85% of the image\").",
+      "fix": "recrop_to_fill"
+    },
+    "R3": {
+      "title": "Image size",
+      "basis": "amazon",
+      "amazon": "Minimum 500 pixels and maximum 10,000 pixels on the longest side. Images with 1,000+ pixels on the longest side enable the zoom function. Do not artificially enlarge small images.",
+      "what": "Longest side between 500 and 10,000 px; 1,000+ px recommended for zoom.",
+      "why": "Amazon rejects images outside that range; 1,000+ px enables zoom on the product page.",
+      "how": "We read the image size. Under 1,000 px passes with a zoom note. We never enlarge images, because Amazon says not to.",
+      "fix": null
+    },
+    "R4": {
+      "title": "No added text or badges",
+      "basis": "amazon",
+      "amazon": "No text or pricing details. No badges used on Amazon, or variations, such as \"Amazon's Choice\", \"Best seller\" or \"Top seller\". No Amazon logos or trademarks.",
+      "what": "No text, prices, badges, logos or watermarks added on top of the photo.",
+      "why": "Amazon prohibits them on product images. Text printed on the product's own packaging is part of the product.",
+      "how": "OpenCV's DB text detector finds text; text inside the product outline counts as packaging, text or flat badges on the backdrop count as added.",
+      "fix": "inpaint_watermark"
+    },
+    "R5": {
+      "title": "No border or frame",
+      "basis": "derived",
+      "amazon": null,
+      "what": "No coloured border or frame around the image.",
+      "why": "Amazon's page does not name borders, but a border is non-white background, which the pure-white rule does not allow.",
+      "how": "We scan inward from each edge, line by line, for a uniform band that differs from what lies inside it.",
+      "fix": "remove_border"
+    },
+    "R6": {
+      "title": "Sharp, in focus",
+      "basis": "amazon",
+      "amazon": "Clear, non-pixelated, no jagged edges. Accurately represent the product as a realistic, professional-quality image.",
+      "what": "The product must be in focus.",
+      "why": "Amazon's image quality requirement; blurry photos also lose clicks.",
+      "how": "Variance of the Laplacian (edge strength) on the product; below 60 counts as blurry (our threshold).",
+      "fix": null
+    },
+    "R7": {
+      "title": "Whole product in frame",
+      "basis": "amazon",
+      "amazon": "Show the entire product within the frame of the image. Do not cut off any part of the product.",
+      "what": "No part of the product may be cut off by the image edge.",
+      "why": "Amazon's requirement. Centring is our advice only: it is shown as a note and never lowers the score.",
+      "how": "We check whether the product runs into the image edge. We also note when its centre is more than 8% off (advice).",
+      "fix": null
+    },
+    "R8": {
+      "title": "Exposure",
+      "basis": "derived",
+      "amazon": "The image should accurately represent the real scale, quantity, and color of the product.",
+      "what": "The product is neither washed out nor underexposed.",
+      "why": "Bad exposure misrepresents the product's colour, which Amazon's accuracy requirement covers.",
+      "how": "Our check: the product's average brightness must not be too high (washed out), and it must have some bright highlights (not underexposed).",
+      "fix": null
+    }
+  },
+  "weights": {
+    "R1": 3,
+    "R2": 2,
+    "R3": 1,
+    "R4": 3,
+    "R5": 1,
+    "R6": 2,
+    "R7": 2,
+    "R8": 1
+  },
+  "tools": {
+    "whiten_background": {
+      "label": "Whiten background",
+      "what": "Sets every backdrop pixel to pure white, with a soft 3 px edge so the product does not look cut out.",
+      "safety": "Only pixels outside the protected product area change."
+    },
+    "recrop_to_fill": {
+      "label": "Reframe to fill",
+      "what": "Crops to a square around the product so it fills about 87% of the frame, which also centres it.",
+      "safety": "The frame always contains the whole product; pixels are moved, never altered."
+    },
+    "pad_to_square": {
+      "label": "Pad to square",
+      "what": "Adds white space to make the image square, so it fills a square search tile without letterboxing (our choice; Amazon does not require square).",
+      "safety": "Only new white pixels are added."
+    },
+    "remove_border": {
+      "label": "Remove border",
+      "what": "Paints a detected border or frame white.",
+      "safety": "Refuses if the border touches the product."
+    },
+    "inpaint_watermark": {
+      "label": "Remove text or badge",
+      "what": "Fills in text, badges or watermarks on the backdrop using OpenCV inpainting.",
+      "safety": "Only runs on the backdrop; text printed on the product is never touched."
+    },
+    "finish": {
+      "label": "Finish",
+      "what": "The planner stops and writes its summary.",
+      "safety": ""
+    }
+  },
+  "metrics": {
+    "score": "Compliance score from 0 to 100. Each rule has a weight; a passing rule earns its full weight, a fixable one half, a reshoot none.",
+    "status": {
+      "PASS": "Meets the rule.",
+      "FIXABLE": "Breaks the rule, but the agent can fix it without touching the product.",
+      "RESHOOT": "Breaks the rule in a way editing cannot fix; a new photo is needed."
+    },
+    "visibility": "How much your image stands out as a search thumbnail. We place it among 8 other products and measure where the eye is drawn (spectral-residual saliency). 50 means an average share of attention; 100 means twice its share or more.",
+    "guarantee": "After every edit we map the original product pixels onto the new image and compare them one by one. Any edit that changes even one product pixel is rejected. Edits only change the backdrop or move the canvas (crop, pad); the product is never resampled or enlarged.",
+    "diff_map": "Grey is the product region that was compared; red would mark any product pixel that changed. Black is background.",
+    "planner": {
+      "claude": "Claude on Amazon Bedrock reads the inspection report (not the image) and decides which tools to run, in what order.",
+      "rules": "A fixed rule-based planner chooses the tools. Used offline, as a fallback, or when the demo's daily Claude budget is used up."
+    },
+    "segmentation": {
+      "studio": "Plain backdrop found: the product outline is reliable, so the backdrop can be edited.",
+      "scene": "Lifestyle or scene photo: the product outline is uncertain, so nothing is edited."
+    }
+  }
+};
 
 // ---------------------------------------------------------------- store
 
@@ -451,9 +625,11 @@ function create(fixture: Fixture, filename: string, createdAt: Date): Entry {
     },
     visibility_after: null,
     steps: [],
+    current_step: null,
     summary: null,
     needs_reshoot: [],
     guarantee: null,
+    fixed_download_url: null,
     images: {
       original: img(entry, 'orig', () => sceneImage(f.scene, false)),
       overlay: img(entry, 'over', () => sceneImage(f.scene, true)),
@@ -475,13 +651,15 @@ function complete(entry: Entry) {
   r.after = f.after;
   r.summary = f.summary;
   r.needs_reshoot = f.needs_reshoot;
-  r.guarantee = { passed: true, changed_product_pixels: 0 };
+  r.guarantee = f.guarantee;
   r.visibility_after = {
     score: f.vis[1],
     grid_url: img(entry, 'grid1', () => gridImage(f.fixedScene, false, 0)),
     saliency_url: img(entry, 'sal1', () => gridImage(f.fixedScene, true, f.vis[1] / 100)),
   };
   r.images.fixed = img(entry, 'fixed', () => sceneImage(f.fixedScene, false));
+  r.fixed_download_url = r.images.fixed; // data: URL; <a download> names it
+  r.current_step = null;
   r.images.fixed_overlay = img(entry, 'fixedOver', () => sceneImage(f.fixedScene, true));
   r.images.diff = img(entry, 'diff', () => diffImage(f.fixedScene));
 }
@@ -504,6 +682,8 @@ function snapshot(entry: Entry): Result {
     const elapsed = Date.now() - entry.fixStartedAt;
     const visible = Math.min(entry.fixture.steps.length, Math.floor(elapsed / STEP_INTERVAL_MS));
     r.steps = entry.fixture.steps.slice(0, visible);
+    const next = entry.fixture.steps[visible];
+    r.current_step = next ? { n: next.n, tool: next.tool, reason: next.reason } : null;
     if (visible >= entry.fixture.steps.length && elapsed >= (visible + 0.6) * STEP_INTERVAL_MS) complete(entry);
   }
   return structuredClone(r);
@@ -519,17 +699,24 @@ function need(id: string): Entry {
 
 export async function mockRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   seed();
-  await delay(method === 'POST' && path === '/api/analyze' ? 1400 : 250);
+  await delay(method === 'POST' && path.startsWith('/api/analyze') ? 1400 : 250);
   let m: RegExpMatchArray | null;
   if (method === 'GET' && path === '/api/health') {
     return { ok: true, planner: 'claude', model: 'anthropic.claude (mock)' } satisfies Health as T;
   }
+  if (method === 'GET' && path === '/api/meta') return structuredClone(META) as T;
   if (method === 'POST' && path === '/api/analyze') {
     const { image_base64, filename } = (body ?? {}) as { image_base64?: string; filename?: string };
     if (!image_base64) throw new ApiError(400, 'image_base64 is required');
     if (filename?.toLowerCase().includes('limit')) throw new ApiError(429, 'Daily demo limit reached');
     const entry = create(fixtureA(), filename || 'upload.jpg', new Date());
     return snapshot(entry) as T;
+  }
+  if (method === 'POST' && path === '/api/analyze-url') {
+    const { url } = (body ?? {}) as { url?: string };
+    if (!url?.startsWith('https://')) throw new ApiError(400, 'Only https:// image links are supported');
+    const name = url.split('?')[0].split('/').pop() || 'image.jpg';
+    return snapshot(create(fixtureA(), name, new Date())) as T;
   }
   if (method === 'POST' && (m = path.match(/^\/api\/fix\/(.+)$/))) {
     const entry = need(m[1]);
@@ -552,8 +739,12 @@ export async function mockRequest<T>(method: string, path: string, body?: unknow
         filename: r.filename,
         score_before: r.before.score,
         score_after: r.after?.score ?? null,
+        status_before: r.before.status,
+        status_after: r.after?.status ?? null,
+        needs_reshoot_count: r.needs_reshoot.length,
         state: r.state,
         thumb_url: r.images.fixed ?? r.images.original,
+        original_thumb_url: r.images.original,
       }));
     return { items } satisfies Gallery as T;
   }
