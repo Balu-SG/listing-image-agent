@@ -5,7 +5,46 @@ search, **without ever changing the product**. OpenCV 5 does every check and eve
 Claude on Amazon Bedrock only plans which fixes to run and explains them to the seller. Every
 edit is verified against the original product pixels before it is kept.
 
-Entry for the OpenCV AI Competition 2026 (powered by AWS).
+Entry for the OpenCV AI Competition 2026 (powered by AWS), Agentic Vision path. Solo entry.
+
+| | |
+| --- | --- |
+| Live demo | https://d2dvlco30s0p5j.cloudfront.net |
+| Video (2:34) | https://youtu.be/BkbTWrhgHMg |
+| Technical report | [docs/REPORT.md](docs/REPORT.md) |
+| Agent traces, failure handling | [docs/AGENT_TRACE.md](docs/AGENT_TRACE.md) |
+| API contract | [docs/API.md](docs/API.md) |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U["Seller or judge<br/>(browser)"] -->|HTTPS| CF["Amazon CloudFront<br/>+ S3: React UI"]
+    U -->|"/api, HTTPS"| AG["Amazon API Gateway<br/>HTTP API, 5 req/s"]
+    AG --> L["AWS Lambda container (arm64, Graviton)<br/>FastAPI + OpenCV 5:<br/>segment, inspect 8 rules, saliency"]
+    L -->|"asynchronous self-invocation"| J["Lambda fix job<br/>agent loop + OpenCV 5 fix tools<br/>+ product-unchanged check"]
+    J -->|"InvokeModel (au. inference profile)"| B["Amazon Bedrock<br/>Claude Opus 4.6"]
+    L --> S3[("Amazon S3<br/>images, 30-day expiry")]
+    J --> S3
+    L --> D[("Amazon DynamoDB<br/>results, steps, daily cap")]
+    J --> D
+    J --> CW["Amazon CloudWatch<br/>logs"]
+```
+
+## Agent loop
+
+OpenCV 5 output drives every decision: after each tool call the agent re-inspects the image and
+Claude chooses the next step from the fresh report.
+
+```mermaid
+flowchart TD
+    P["Perceive: OpenCV 5 inspection<br/>8 rules, score, evidence"] --> D{"Decide: Claude reads<br/>the JSON report"}
+    D -->|"tool call"| A["Act: deterministic OpenCV 5 tool<br/>whiten, inpaint, reframe, pad, remove border"]
+    A --> G{"Verify: product pixels unchanged<br/>and score not lower?"}
+    G -->|"no"| X["Reject the edit,<br/>report why"] --> D
+    G -->|"yes"| R["Re-perceive: fresh OpenCV 5 inspection"] --> D
+    D -->|"finish"| H["Hand over to the seller:<br/>download, or needs a new photo / a person"]
+```
 
 ## How it works
 
