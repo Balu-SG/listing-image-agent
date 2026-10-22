@@ -155,3 +155,9 @@ ALERT_EMAIL=you@example.com scripts/deploy.sh preview   # then: ... apply
 
 - Amazon Berkeley Objects, CC BY 4.0 — sample and neighbour images.
 - U^2-Net-p (Apache-2.0), PP-OCRv3 text detection via OpenCV Zoo (Apache-2.0).
+
+## License
+
+The code is MIT licensed (see `LICENSE`). The sample and neighbour images in `assets/` come from
+Amazon Berkeley Objects and remain under CC BY 4.0; the pretrained models fetched by
+`scripts/fetch_models.sh` keep their own licenses (Apache-2.0).
