@@ -10,7 +10,7 @@ Entry for the OpenCV AI Competition 2026 (powered by AWS), Agentic Vision path. 
 | | |
 | --- | --- |
 | Live demo | https://d2dvlco30s0p5j.cloudfront.net |
-| Video (2:34) | https://youtu.be/BkbTWrhgHMg |
+| Video (2:40) | https://youtu.be/FHj6d4XUomQ |
 | Technical report | [docs/REPORT.md](docs/REPORT.md) |
 | Agent traces, failure handling | [docs/AGENT_TRACE.md](docs/AGENT_TRACE.md) |
 | API contract | [docs/API.md](docs/API.md) |

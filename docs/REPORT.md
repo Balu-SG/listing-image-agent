@@ -4,7 +4,7 @@ OpenCV AI Competition 2026, powered by AWS · Solo entry by Balamurugan · Agent
 
 - Live demo: https://d2dvlco30s0p5j.cloudfront.net
 - Code: https://github.com/Balu-SG/listing-image-agent
-- Video: https://youtu.be/BkbTWrhgHMg
+- Video: https://youtu.be/FHj6d4XUomQ
 - Agent traces and failure-handling evidence: [AGENT_TRACE.md](AGENT_TRACE.md)
 
 ## 1. Problem
