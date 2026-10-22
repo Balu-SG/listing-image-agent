@@ -20,21 +20,32 @@ def _background_mask(ctx: Context) -> np.ndarray:
     return cv2.bitwise_not(cv2.dilate(ctx.protect, kernel))
 
 
+def detect_text(image: np.ndarray, config: dict) -> list[np.ndarray]:
+    """Text quadrilaterals (4x2 int arrays) in image coordinates, PP-OCRv3 DB detector."""
+    cfg = config["text"]
+    height, width = image.shape[:2]
+    scale = min(1.0, cfg["max_long_side"] / max(height, width))
+    size = (max(32, round(width * scale / 32) * 32), max(32, round(height * scale / 32) * 32))
+    detector = models.text_detector()
+    detector.setInputParams(1.0 / 255.0, size, (122.67891434, 116.66876762, 104.00698793))
+    boxes, _ = detector.detect(image)
+    return [np.asarray(box, dtype=np.int32).reshape(4, 2) for box in boxes]
+
+
 def text_boxes(ctx: Context) -> list[np.ndarray]:
-    """Detected text quadrilaterals (4x2 int arrays) in original image coordinates."""
     if ctx._text_boxes is None:
-        cfg = ctx.config["text"]
-        scale = min(1.0, cfg["max_long_side"] / max(ctx.height, ctx.width))
-        size = (max(32, round(ctx.width * scale / 32) * 32), max(32, round(ctx.height * scale / 32) * 32))
-        detector = models.text_detector()
-        detector.setInputParams(1.0 / 255.0, size, (122.67891434, 116.66876762, 104.00698793))
-        boxes, _ = detector.detect(ctx.image)
-        ctx._text_boxes = [np.asarray(box, dtype=np.int32).reshape(4, 2) for box in boxes]
+        ctx._text_boxes = detect_text(ctx.image, ctx.config)
     return ctx._text_boxes
 
 
 def r1_background(ctx: Context) -> RuleResult:
     cfg = ctx.config["background"]
+    if ctx.mode == "scene":
+        return RuleResult(
+            "R1", "Pure white background", Status.RESHOOT, 0.0,
+            "This is a lifestyle or scene photo; a main image needs the product alone on a plain white backdrop.",
+            evidence={"mode": "scene"},
+        )
     background = _background_mask(ctx) > 0
     if not background.any():
         return RuleResult("R1", "Pure white background", Status.PASS, 1.0, "No visible background around the product.")
@@ -133,22 +144,42 @@ def border_thickness(line_means: np.ndarray, line_stds: np.ndarray, min_contrast
     return thickness if contrasts else 0
 
 
-def r5_border(ctx: Context) -> RuleResult:
-    cfg = ctx.config["border"]
-    max_lines = max(4, int(max(ctx.height, ctx.width) * cfg["max_share"]))
-    color = ctx.image.astype(np.float32)
-    lines = {  # each side as (lines from the edge inward, pixels along the line, channels)
-        "top": color[:max_lines], "bottom": color[::-1][:max_lines],
-        "left": color[:, :max_lines].transpose(1, 0, 2), "right": color[:, ::-1][:, :max_lines].transpose(1, 0, 2),
+def find_border(image: np.ndarray, config: dict) -> dict[str, int]:
+    """Border thickness in px per side that has one (top/bottom/left/right)."""
+    cfg = config["border"]
+    max_lines = max(4, int(max(image.shape[:2]) * cfg["max_share"]))
+    luma = image.astype(np.float32).mean(axis=2)
+    lines = {  # each side as (lines from the edge inward, pixels along the line)
+        "top": luma[:max_lines], "bottom": luma[::-1][:max_lines],
+        "left": luma[:, :max_lines].T, "right": luma[:, ::-1][:, :max_lines].T,
     }
     thickness = {}
     for side, band in lines.items():
-        luma = band.mean(axis=2)
-        if luma[0].mean() >= ctx.config["background"]["near_white_value"]:
+        if band[0].mean() >= config["background"]["near_white_value"]:
             continue  # white margin is background, not a border
-        found = border_thickness(luma.mean(axis=1), luma.std(axis=1), cfg["min_contrast"], cfg["max_std"])
+        found = border_thickness(band.mean(axis=1), band.std(axis=1), cfg["min_contrast"], cfg["max_std"])
         if found:
             thickness[side] = found
+    return thickness
+
+
+def border_band(shape: tuple[int, int], thickness: dict[str, int], extra: int = 2) -> np.ndarray:
+    """Boolean mask of the border bands, widened by `extra` px to cover anti-aliased edges."""
+    height, width = shape
+    band = np.zeros((height, width), bool)
+    if "top" in thickness:
+        band[: thickness["top"] + extra] = True
+    if "bottom" in thickness:
+        band[height - thickness["bottom"] - extra:] = True
+    if "left" in thickness:
+        band[:, : thickness["left"] + extra] = True
+    if "right" in thickness:
+        band[:, width - thickness["right"] - extra:] = True
+    return band
+
+
+def r5_border(ctx: Context) -> RuleResult:
+    thickness = find_border(ctx.image, ctx.config)
     sides = list(thickness)
     evidence = {"border_sides": sides, "thickness_px": thickness}
     if not sides:

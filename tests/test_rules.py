@@ -21,12 +21,12 @@ def product_on(background: int | tuple, size: int = 1200, fill: float = 0.9, off
 
 
 def statuses(image: np.ndarray) -> dict:
-    report, _ = inspect_image(image, segmentation="threshold")
+    report, _ = inspect_image(image, segmentation="flood")
     return {rule["rule_id"]: rule["status"] for rule in report["rules"]}
 
 
 def test_compliant_image_passes_everything():
-    report, _ = inspect_image(product_on(255), segmentation="threshold")
+    report, _ = inspect_image(product_on(255), segmentation="flood")
     assert report["status"] == "PASS", report
     assert report["score"] == 100
 
@@ -71,8 +71,8 @@ def test_blur_needs_reshoot():
 def test_added_text_on_background_is_flagged():
     image = product_on(255, fill=0.7)
     cv2.putText(image, "BESTSELLER", (60, 110), cv2.FONT_HERSHEY_SIMPLEX, 2.5, (0, 0, 220), 6)
-    # threshold segmentation would count the red text as product, so use the U^2-Net mask here
-    report, _ = inspect_image(image, segmentation="u2net")
+    # on a plain backdrop the text is a separate piece mostly covered by text: an overlay, not product
+    report, _ = inspect_image(image)
     rule = next(rule for rule in report["rules"] if rule["rule_id"] == "R4")
     assert rule["status"] == "FIXABLE", rule
 
@@ -83,7 +83,32 @@ def test_u2net_segments_a_product():
     assert 0.2 < share < 0.6
 
 
-@pytest.mark.parametrize("method", ["auto", "threshold"])
-def test_segmentation_methods_run(method):
-    mask = segment.segment_product(product_on(255), method)
+@pytest.mark.parametrize("method,mode", [("auto", "studio"), ("flood", "studio"), ("u2net", "scene")])
+def test_segmentation_methods_run(method, mode):
+    mask, found_mode = segment.segment_product(product_on(255), method)
     assert mask.dtype == np.uint8 and mask.max() == 255
+    assert found_mode == mode
+
+
+def test_scene_background_needs_reshoot():
+    rng = np.random.default_rng(0)
+    image = np.full((1200, 1200, 3), 180, np.uint8)
+    for _ in range(600):  # a "room": hard-edged objects everywhere, no plain backdrop visible
+        x, y = rng.integers(0, 1100, 2)
+        w, h = rng.integers(40, 300, 2)
+        cv2.rectangle(image, (int(x), int(y)), (int(x + w), int(y + h)), [int(c) for c in rng.integers(0, 255, 3)], -1)
+    cv2.circle(image, (600, 600), 400, (30, 30, 200), -1)
+    grain = rng.normal(0, 10, image.shape)  # real photos have texture; flat synthetic colour does not
+    image = np.clip(image + grain, 0, 255).astype(np.uint8)
+    report, _ = inspect_image(image)
+    rule = next(rule for rule in report["rules"] if rule["rule_id"] == "R1")
+    assert rule["status"] == "RESHOOT"
+
+
+def test_printed_label_stays_product():
+    """A can with a printed label: the label must be inside the product mask, not background."""
+    image = product_on(255, fill=0.8)
+    cv2.rectangle(image, (300, 450), (900, 750), (250, 250, 250), -1)  # near-white label panel inside the product
+    report, ctx = inspect_image(image)
+    assert ctx.mode == "studio"
+    assert ctx.mask[600, 600] == 255

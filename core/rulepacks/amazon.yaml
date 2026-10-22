@@ -1,7 +1,7 @@
 # Amazon main-image rule pack. Thresholds are our interpretation of the published
 # style guide, not Amazon's internal algorithm; tune them against eval/labels.csv.
 marketplace: amazon
-segmentation: auto            # auto | u2net | threshold
+segmentation: auto            # auto (flood if plain backdrop, else u2net) | flood | u2net
 
 background:
   pure_value: 255             # every channel must be >= this to count as pure white

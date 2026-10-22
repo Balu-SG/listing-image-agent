@@ -7,8 +7,8 @@ import cv2
 import numpy as np
 import yaml
 
-from core.rules import ALL_RULES, text_boxes
-from core.segment import protect_mask, segment_product
+from core.rules import ALL_RULES, border_band, detect_text, find_border
+from core.segment import protect_mask, segment_product, split_text_overlays
 from core.types import Context, Status
 
 RULEPACK_DIR = Path(__file__).resolve().parent / "rulepacks"
@@ -33,20 +33,35 @@ def overall_status(results) -> Status:
     return Status.FIXABLE if Status.FIXABLE in statuses else Status.PASS
 
 
-def inspect_image(image: np.ndarray, rulepack: str = "amazon", segmentation: str | None = None) -> tuple[dict, Context]:
+def build_context(image: np.ndarray, rulepack: str = "amazon", segmentation: str | None = None) -> Context:
+    """Segment once; border bands are never product, so they leave both masks before anything else."""
     config = load_rulepack(rulepack)
-    mask = segment_product(image, segmentation or config["segmentation"])
-    ctx = Context(image=image, mask=mask, protect=protect_mask(image, mask), config=config)
+    mask, mode = segment_product(image, segmentation or config["segmentation"])
+    band = border_band(image.shape[:2], find_border(image, config))
+    mask[band] = 0
+    boxes = detect_text(image, config)
+    if mode == "studio":
+        mask, _ = split_text_overlays(mask, boxes)
+    protect = protect_mask(image, mask, mode)
+    protect[band] = 0
+    return Context(image=image, mask=mask, protect=protect, config=config, mode=mode, _text_boxes=boxes)
+
+
+def inspect_context(ctx: Context, rulepack: str = "amazon") -> dict:
     results = [rule(ctx) for rule in ALL_RULES]
-    report = {
+    return {
         "rulepack": rulepack,
         "width": ctx.width,
         "height": ctx.height,
-        "score": score(results, config["weights"]),
+        "score": score(results, ctx.config["weights"]),
         "status": overall_status(results).value,
         "rules": [result.to_dict() for result in results],
     }
-    return report, ctx
+
+
+def inspect_image(image: np.ndarray, rulepack: str = "amazon", segmentation: str | None = None) -> tuple[dict, Context]:
+    ctx = build_context(image, rulepack, segmentation)
+    return inspect_context(ctx, rulepack), ctx
 
 
 def draw_overlay(ctx: Context, report: dict) -> np.ndarray:
@@ -70,4 +85,4 @@ def draw_overlay(ctx: Context, report: dict) -> np.ndarray:
     return overlay
 
 
-__all__ = ["inspect_image", "draw_overlay", "load_rulepack", "text_boxes"]
+__all__ = ["build_context", "inspect_context", "inspect_image", "draw_overlay", "load_rulepack"]

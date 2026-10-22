@@ -32,8 +32,9 @@ class Context:
 
     image: np.ndarray  # BGR uint8
     mask: np.ndarray  # uint8 0/255, product = 255; tight, used for geometry (fill, centring)
-    protect: np.ndarray  # uint8 0/255; mask + nearby non-white (thin parts, shadows); fixes never touch it
+    protect: np.ndarray  # uint8 0/255; pixels no fix may touch
     config: dict
+    mode: str = "studio"  # studio (plain backdrop, editable) | scene (lifestyle photo, background not editable)
     _text_boxes: list | None = None
 
     @property

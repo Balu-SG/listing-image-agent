@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     inspect_cmd = sub.add_parser("inspect", help="score images against a rule pack")
     inspect_cmd.add_argument("images", nargs="+", type=Path)
     inspect_cmd.add_argument("--rulepack", default="amazon")
-    inspect_cmd.add_argument("--segmentation", choices=["auto", "u2net", "threshold"])
+    inspect_cmd.add_argument("--segmentation", choices=["auto", "u2net", "flood"])
     inspect_cmd.add_argument("--out", type=Path, help="write <name>.json and <name>.overlay.png here")
     args = parser.parse_args(argv)
 
