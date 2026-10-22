@@ -102,7 +102,7 @@ Resources:
           Properties:
             Schedule: rate(5 minutes)
             Input: '{"warmup": true}'
-            Enabled: false             # turn on during judging to avoid cold starts
+            Enabled: true              # on during public voting and judging (26 Oct - 10 Nov 2026) to avoid cold starts
 
   HttpApi:
     Type: AWS::Serverless::HttpApi
