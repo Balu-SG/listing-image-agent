@@ -13,6 +13,7 @@ from agent.session import Session, compact_report
 log = logging.getLogger(__name__)
 
 MAX_TURNS = 12
+BEDROCK_API_VERSION = "bedrock-2023-05-31"
 
 SYSTEM_PROMPT = """You fix product listing main images so they meet a marketplace's image rules.
 
@@ -87,13 +88,25 @@ TOOLS = [
 ]
 
 
+def bedrock_model_id(model: str, region: str) -> str:
+    """Bedrock wants a cross-region inference profile id, e.g. au.anthropic.claude-opus-5-5 in Sydney.
+
+    A full id (anything containing "anthropic.") is used as given.
+    """
+    if "anthropic." in model:
+        return model
+    prefix = os.environ.get("BEDROCK_PROFILE") or ("au" if region.startswith("ap-southeast-2") else "us" if region.startswith("us-") else "global")
+    return f"{prefix}.anthropic.{model}"
+
+
 def make_client() -> tuple[anthropic.Anthropic, str]:
     backend = os.environ.get("AGENT_BACKEND", "bedrock")
     model = os.environ.get("AGENT_MODEL", "claude-opus-5-5")
     if backend == "bedrock":
-        region = os.environ.get("BEDROCK_REGION") or os.environ.get("AWS_REGION", "us-east-1")
-        client = anthropic.AnthropicBedrockMantle(aws_region=region)
-        return client, model if model.startswith("anthropic.") else f"anthropic.{model}"
+        # The standard Bedrock runtime client: available in every Bedrock region and accepts
+        # inference profile ids (the Mantle endpoint does not serve Claude in ap-southeast-2).
+        region = os.environ.get("BEDROCK_REGION") or os.environ.get("AWS_REGION", "ap-southeast-2")
+        return anthropic.AnthropicBedrock(aws_region=region), bedrock_model_id(model, region)
     return anthropic.Anthropic(), model
 
 
@@ -108,11 +121,13 @@ def run(session: Session) -> str:
 
     for _ in range(MAX_TURNS):
         response = client.messages.create(
+            # Bedrock InvokeModel only accepts its own version string; the SDK default is the Claude API's.
+            **({"extra_body": {"anthropic_version": BEDROCK_API_VERSION}} if isinstance(client, anthropic.AnthropicBedrock) else {}),
             model=model,
             max_tokens=4000,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
-            output_config={"effort": effort},
+            **({"output_config": {"effort": effort}} if effort else {}),  # AGENT_EFFORT="" for models without effort
             messages=messages,
         )
         if response.stop_reason == "refusal":

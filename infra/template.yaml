@@ -13,7 +13,7 @@ Parameters:
     Description: Claude model id (the Bedrock client adds the "anthropic." prefix)
   BedrockRegion:
     Type: String
-    Default: us-east-1
+    Default: ap-southeast-2   # the account's free-plan region; Claude is called via the au. inference profile
   DailyClaudeLimit:
     Type: Number
     Default: 200
@@ -79,9 +79,11 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResultsTable
         - Statement:
-            - Effect: Allow
-              Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock-mantle:*]
-              Resource: "*"
+            - Effect: Allow   # au. cross-region profiles route to Australian regions; the model ARN is region-less
+              Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+              Resource:
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+                - arn:aws:bedrock:*::foundation-model/anthropic.*
             - Effect: Allow
               Action: lambda:InvokeFunction    # asynchronous self-invocation for fix jobs
               Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-agent

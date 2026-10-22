@@ -117,8 +117,10 @@ uv run uvicorn api.app:app --port 8000                    # API (docs/API.md)
 uv run python scripts/build_gallery.py data/abo/91wf28y8wLL.jpg ...  # precomputed examples
 ```
 
-Use Claude as the planner: `PLANNER=claude AGENT_BACKEND=bedrock BEDROCK_REGION=us-east-1` (AWS
-credentials with Bedrock access) or `AGENT_BACKEND=anthropic` with `ANTHROPIC_API_KEY`.
+Use Claude as the planner: `PLANNER=claude AGENT_BACKEND=bedrock BEDROCK_REGION=ap-southeast-2` (AWS
+credentials with Bedrock access; the model is called through the `au.` inference profile, e.g.
+`au.anthropic.claude-opus-5-5`) or `AGENT_BACKEND=anthropic` with `ANTHROPIC_API_KEY`. Locally, `aws login`
+credentials need the `botocore[crt]` dev dependency (installed by `uv sync`).
 `AGENT_MODEL` defaults to `claude-opus-5-5`; `AGENT_EFFORT` defaults to `low`.
 
 ## Deploy to AWS
